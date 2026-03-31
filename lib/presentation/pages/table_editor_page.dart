@@ -1,0 +1,1612 @@
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
+import 'package:config_moodle/core/theme/app_theme.dart';
+import 'package:config_moodle/domain/entities/course_config.dart';
+import 'package:config_moodle/domain/entities/moodle_entities.dart';
+import 'package:config_moodle/presentation/controllers/config_controller.dart';
+import 'package:config_moodle/presentation/controllers/auth_controller.dart';
+import 'package:config_moodle/presentation/controllers/sync_controller.dart';
+import 'package:config_moodle/core/utils/macro_resolver.dart';
+import 'package:config_moodle/presentation/widgets/common_widgets.dart';
+
+class TableEditorPage extends StatefulWidget {
+  final String courseConfigId;
+  const TableEditorPage({super.key, required this.courseConfigId});
+
+  @override
+  State<TableEditorPage> createState() => _TableEditorPageState();
+}
+
+class _TableEditorPageState extends State<TableEditorPage> {
+  final _df = DateFormat('dd/MM/yyyy');
+  final _dfh = DateFormat('dd/MM/yyyy HH:mm');
+  final _scrollController = ScrollController();
+
+  static const _typesWithTime = {
+    'Tarefa',
+    'Questionário',
+    'Pesquisa',
+    'Escolha',
+  };
+
+  bool _needsTime(String type) => _typesWithTime.contains(type);
+
+  static const _modnameToType = {
+    'assign': 'Tarefa',
+    'quiz': 'Questionário',
+    'feedback': 'Pesquisa',
+    'choice': 'Escolha',
+    'forum': 'Fórum',
+    'resource': 'Arquivo',
+    'url': 'URL',
+    'page': 'Página',
+    'folder': 'Pasta',
+    'wiki': 'Wiki',
+    'glossary': 'Glossário',
+    'lesson': 'Lição',
+    'h5pactivity': 'H5P',
+    'data': 'Base de dados',
+    'journal': 'Diário',
+    'attendance': 'Presença',
+    'bigbluebuttonbn': 'ConferênciaWeb',
+    'jitsi': 'Jitsi',
+    'book': 'Livro',
+    'scorm': 'Pacote SCORM',
+    'imscp': 'Conteúdo do pacote IMS',
+    'simplecertificate': 'Certificado Simples',
+    'checklist': 'Checklist',
+    'geogebra': 'GeoGebra',
+    'workshop': 'Laboratório de Avaliação',
+    'survey': 'Pesquisa',
+    'hotpot': 'Atividade Hot Potatoes',
+    'label': 'Área de texto e mídia',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final ctrl = context.read<ConfigController>();
+      await ctrl.loadById(widget.courseConfigId);
+      if (!mounted) return;
+      final config = ctrl.current;
+      final auth = context.read<AuthController>();
+      if (config != null && config.moodleCourseId != null && auth.isLoggedIn) {
+        final sync = context.read<SyncController>();
+        if (sync.moodleSections.isEmpty) {
+          await sync.loadMoodleSections(
+              auth.token, auth.baseUrl, config.moodleCourseId!);
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ctrl = context.watch<ConfigController>();
+    final config = ctrl.current;
+    final auth = context.watch<AuthController>();
+
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(gradient: AppTheme.bgGradient),
+        child: SafeArea(
+          child: Column(
+            children: [
+              _buildTopBar(context, config, ctrl, auth),
+              if (config != null) _buildDateHeader(context, config, ctrl),
+              Expanded(
+                child: ctrl.loading
+                    ? const Center(
+                        child:
+                            CircularProgressIndicator(color: AppTheme.primary))
+                    : config == null
+                        ? const EmptyState(
+                            icon: Icons.error_outline,
+                            title: 'Configuração não encontrada',
+                            subtitle: 'Volte à tela inicial.',
+                          )
+                        : config.sections.isEmpty
+                            ? EmptyState(
+                                icon: Icons.view_list,
+                                title: 'Sem seções',
+                                subtitle: 'Adicione a primeira seção.',
+                                action: GradientButton(
+                                  label: 'Adicionar Seção',
+                                  icon: Icons.add,
+                                  onPressed: () =>
+                                      _showAddSectionDialog(context, ctrl),
+                                ),
+                              )
+                            : _buildSectionsList(context, config, ctrl),
+              ),
+            ],
+          ),
+        ),
+      ),
+      floatingActionButton: config?.sections.isNotEmpty == true
+          ? FloatingActionButton(
+              onPressed: () => _showAddSectionDialog(context, ctrl),
+              child: const Icon(Icons.add),
+            )
+          : null,
+    );
+  }
+
+  Widget _buildTopBar(BuildContext context, CourseConfig? config,
+      ConfigController ctrl, AuthController auth) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.arrow_back, color: AppTheme.textPrimary),
+            onPressed: () => context.go('/'),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: GestureDetector(
+              onTap: config != null
+                  ? () => _showRenameDialog(context, config, ctrl)
+                  : null,
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      config != null
+                          ? MacroResolver.resolve(
+                              config.name, config.semesterStartDate)
+                          : 'Carregando...',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.textPrimary,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (config != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: Icon(Icons.edit_outlined,
+                          color: AppTheme.accentGreen, size: 18),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          if (config != null && auth.isLoggedIn) ...[
+            _buildCourseChip(context, config, ctrl, auth),
+            const SizedBox(width: 8),
+            GradientButton(
+              label: 'Sincronizar',
+              icon: Icons.sync,
+              compact: true,
+              gradient: AppTheme.accentGradient,
+              onPressed: () => context.push('/sync/${config.id}'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCourseChip(BuildContext context, CourseConfig config,
+      ConfigController ctrl, AuthController auth) {
+    final hasLinked = config.moodleCourseId != null;
+    return ActionChip(
+      avatar: Icon(
+        hasLinked ? Icons.school : Icons.school_outlined,
+        size: 18,
+        color: hasLinked ? AppTheme.accentGreen : AppTheme.textSecondary,
+      ),
+      label: Text(
+        hasLinked ? (config.moodleCourseName ?? 'Disciplina') : 'Disciplina',
+        style: TextStyle(
+          fontSize: 12,
+          color: hasLinked ? AppTheme.textPrimary : AppTheme.textSecondary,
+        ),
+        overflow: TextOverflow.ellipsis,
+      ),
+      onPressed: () => _showCoursePickerDialog(context, config, ctrl, auth),
+    );
+  }
+
+  void _showCoursePickerDialog(BuildContext context, CourseConfig config,
+      ConfigController ctrl, AuthController auth) async {
+    final syncCtrl = context.read<SyncController>();
+
+    // Carregar cursos se ainda não carregados
+    if (syncCtrl.courses.isEmpty) {
+      await syncCtrl.loadCourses(auth.token, auth.baseUrl);
+    }
+
+    if (!context.mounted) return;
+    final courses = syncCtrl.courses;
+    if (courses.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nenhuma disciplina encontrada.')),
+      );
+      return;
+    }
+
+    String filter = '';
+    final selected = await showDialog<MoodleCourse>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setState) {
+          final lowerFilter = filter.toLowerCase();
+          final filtered = courses
+              .where((c) =>
+                  lowerFilter.isEmpty ||
+                  c.fullname.toLowerCase().contains(lowerFilter) ||
+                  c.shortname.toLowerCase().contains(lowerFilter))
+              .toList();
+          return AlertDialog(
+            title: const Text('Selecionar Disciplina'),
+            content: SizedBox(
+              width: 500,
+              height: 400,
+              child: Column(
+                children: [
+                  TextField(
+                    decoration: const InputDecoration(
+                      labelText: 'Buscar...',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onChanged: (v) => setState(() => filter = v),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: filtered.length,
+                      itemBuilder: (_, i) {
+                        final c = filtered[i];
+                        final isSelected = c.id == config.moodleCourseId;
+                        return ListTile(
+                          dense: true,
+                          selected: isSelected,
+                          leading: Icon(Icons.school,
+                              size: 20,
+                              color: isSelected
+                                  ? AppTheme.accentGreen
+                                  : AppTheme.textSecondary),
+                          title: Text(c.fullname,
+                              style: const TextStyle(fontSize: 13)),
+                          subtitle: Text(c.shortname,
+                              style: const TextStyle(fontSize: 11)),
+                          onTap: () => Navigator.pop(ctx, c),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancelar'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (selected != null && context.mounted) {
+      await ctrl.linkMoodleCourse(selected.id, selected.shortname);
+      await syncCtrl.loadMoodleSections(auth.token, auth.baseUrl, selected.id);
+    }
+  }
+
+  Widget _buildDateHeader(
+      BuildContext context, CourseConfig config, ConfigController ctrl) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
+      child: GlassCard(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        child: Row(
+          children: [
+            const Icon(Icons.calendar_today, color: AppTheme.accent, size: 22),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'DATA DE INÍCIO DO SEMESTRE',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _df.format(config.semesterStartDate),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.accent,
+                  ),
+                ),
+              ],
+            ),
+            const Spacer(),
+            GradientButton(
+              label: 'Alterar',
+              icon: Icons.edit_calendar,
+              compact: true,
+              onPressed: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: config.semesterStartDate,
+                  firstDate: DateTime(2020),
+                  lastDate: DateTime(2030),
+                  builder: (context, child) {
+                    return Theme(
+                      data: Theme.of(context).copyWith(
+                        datePickerTheme: DatePickerThemeData(
+                          backgroundColor: AppTheme.bgSurface,
+                          headerBackgroundColor: AppTheme.primary,
+                          dayForegroundColor:
+                              WidgetStateProperty.all(AppTheme.textPrimary),
+                        ),
+                      ),
+                      child: child!,
+                    );
+                  },
+                );
+                if (picked != null) {
+                  ctrl.updateSemesterStartDate(picked);
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionsList(
+      BuildContext context, CourseConfig config, ConfigController ctrl) {
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 80),
+      itemCount: config.sections.length,
+      itemBuilder: (context, index) {
+        final section = config.sections[index];
+        return _buildSectionTile(
+            context, section, ctrl, config.semesterStartDate);
+      },
+    );
+  }
+
+  Widget _buildSectionTile(BuildContext context, SectionEntry section,
+      ConfigController ctrl, DateTime semesterStart) {
+    final isLinked = section.moodleSectionId != null;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: isLinked
+              ? Border.all(
+                  color: AppTheme.accentGreen.withAlpha(120), width: 1.5)
+              : null,
+        ),
+        child: GlassCard(
+          useGradient: true,
+          child: Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(top: 8),
+              leading: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: section.visible
+                      ? AppTheme.primary.withAlpha(30)
+                      : AppTheme.danger.withAlpha(30),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Center(
+                  child: Text(
+                    '${section.orderIndex}',
+                    style: TextStyle(
+                      color:
+                          section.visible ? AppTheme.primary : AppTheme.danger,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+              title: Text(
+                MacroResolver.resolve(
+                    section.name,
+                    semesterStart,
+                    semesterStart
+                        .add(Duration(days: section.referenceDaysOffset))),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: section.visible
+                      ? AppTheme.textPrimary
+                      : AppTheme.textSecondary,
+                  decoration:
+                      section.visible ? null : TextDecoration.lineThrough,
+                ),
+              ),
+              subtitle: Row(
+                children: [
+                  if (isLinked) ...[
+                    Icon(Icons.link, size: 12, color: AppTheme.accentGreen),
+                    const SizedBox(width: 4),
+                  ],
+                  Icon(Icons.calendar_today,
+                      size: 12, color: AppTheme.textSecondary),
+                  const SizedBox(width: 4),
+                  Text(
+                    _df.format(semesterStart
+                        .add(Duration(days: section.referenceDaysOffset))),
+                    style: const TextStyle(
+                        fontSize: 12, color: AppTheme.textSecondary),
+                  ),
+                  if (section.referenceDaysOffset != 0) ...[
+                    const SizedBox(width: 8),
+                    StatusChip(
+                      label: '+${section.referenceDaysOffset}d',
+                      color: AppTheme.accent,
+                    ),
+                  ],
+                ],
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      section.visible ? Icons.visibility : Icons.visibility_off,
+                      color: section.visible
+                          ? AppTheme.accentGreen
+                          : AppTheme.textSecondary,
+                      size: 20,
+                    ),
+                    onPressed: () => ctrl.updateSection(
+                      section.id,
+                      visible: !section.visible,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined,
+                        color: AppTheme.accentGreen, size: 20),
+                    onPressed: () =>
+                        _showEditSectionDialog(context, section, ctrl),
+                  ),
+                  PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_vert,
+                        color: AppTheme.textSecondary, size: 20),
+                    color: AppTheme.bgSurface,
+                    onSelected: (v) {
+                      if (v == 'edit') {
+                        _showEditSectionDialog(context, section, ctrl);
+                      } else if (v == 'delete') {
+                        ctrl.removeSection(section.id);
+                      } else if (v == 'add_activity') {
+                        _showAddActivityDialog(
+                            context,
+                            section.id,
+                            ctrl,
+                            semesterStart.add(
+                                Duration(days: section.referenceDaysOffset)));
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(value: 'edit', child: Text('Editar')),
+                      const PopupMenuItem(
+                          value: 'add_activity',
+                          child: Text('Adicionar Atividade')),
+                      const PopupMenuItem(
+                          value: 'delete',
+                          child: Text('Excluir',
+                              style: TextStyle(color: AppTheme.danger))),
+                    ],
+                  ),
+                ],
+              ),
+              children: [
+                ReorderableListView(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  buildDefaultDragHandles: false,
+                  onReorder: (oldIdx, newIdx) =>
+                      ctrl.reorderActivities(section.id, oldIdx, newIdx),
+                  children: [
+                    for (int i = 0; i < section.activities.length; i++)
+                      _buildActivityRow(
+                        context,
+                        section.id,
+                        section.activities[i],
+                        ctrl,
+                        semesterStart
+                            .add(Duration(days: section.referenceDaysOffset)),
+                        index: i,
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActivityRow(BuildContext context, String sectionId,
+      ActivityEntry activity, ConfigController ctrl, DateTime sectionRefDate,
+      {required int index}) {
+    return Padding(
+      key: ValueKey(activity.id),
+      padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+      child: Row(
+        children: [
+          ReorderableDragStartListener(
+            index: index,
+            child: const Icon(Icons.drag_handle,
+                size: 18, color: AppTheme.textSecondary),
+          ),
+          const SizedBox(width: 4),
+          if (activity.moodleModuleId != null)
+            Tooltip(
+              message: 'Moodle ID: ${activity.moodleModuleId}',
+              child:
+                  const Icon(Icons.link, size: 14, color: AppTheme.accentGreen),
+            )
+          else
+            const Icon(Icons.link_off, size: 14, color: AppTheme.textSecondary),
+          const SizedBox(width: 6),
+          StatusChip(
+            label: activity.activityType,
+            color: _activityColor(activity.activityType),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              MacroResolver.resolve(
+                  activity.name,
+                  sectionRefDate,
+                  null,
+                  activity.computeOpenDate(sectionRefDate),
+                  activity.computeCloseDate(sectionRefDate)),
+              style: TextStyle(
+                color: activity.visible
+                    ? AppTheme.textPrimary
+                    : AppTheme.textSecondary,
+                fontSize: 13,
+                decoration:
+                    activity.visible ? null : TextDecoration.lineThrough,
+              ),
+            ),
+          ),
+          if (activity.openOffsetDays != null) ...[
+            Text(
+              _formatActivityDate(activity.computeOpenDate(sectionRefDate),
+                  _needsTime(activity.activityType)),
+              style:
+                  const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+            ),
+            if (activity.closeOffsetDays != null) ...[
+              const Text(' → ',
+                  style:
+                      TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              Text(
+                _formatActivityDate(activity.computeCloseDate(sectionRefDate),
+                    _needsTime(activity.activityType)),
+                style: const TextStyle(
+                    fontSize: 11, color: AppTheme.textSecondary),
+              ),
+            ],
+          ],
+          IconButton(
+            icon: Icon(
+              activity.visible ? Icons.visibility : Icons.visibility_off,
+              size: 16,
+              color: activity.visible
+                  ? AppTheme.accentGreen
+                  : AppTheme.textSecondary,
+            ),
+            onPressed: () => ctrl.updateActivity(
+              sectionId,
+              activity.id,
+              visible: !activity.visible,
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.edit_outlined,
+                size: 16, color: AppTheme.accent),
+            onPressed: () => _showEditActivityDialog(
+                context, sectionId, activity, ctrl, sectionRefDate),
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert,
+                size: 16, color: AppTheme.textSecondary),
+            color: AppTheme.bgSurface,
+            onSelected: (v) {
+              if (v == 'delete') {
+                ctrl.removeActivity(sectionId, activity.id);
+              } else if (v.startsWith('move:')) {
+                final targetSectionId = v.substring(5);
+                ctrl.moveActivity(sectionId, targetSectionId, activity.id);
+              }
+            },
+            itemBuilder: (_) {
+              final sections = ctrl.current?.sections ?? [];
+              return [
+                if (sections.length > 1)
+                  PopupMenuItem(
+                    enabled: false,
+                    child: Text('Mover para...',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.textSecondary,
+                            fontWeight: FontWeight.bold)),
+                  ),
+                ...sections.where((s) => s.id != sectionId).map((s) =>
+                    PopupMenuItem(
+                      value: 'move:${s.id}',
+                      child: Text(s.name, style: const TextStyle(fontSize: 13)),
+                    )),
+                if (sections.length > 1) const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'delete',
+                  child:
+                      Text('Excluir', style: TextStyle(color: AppTheme.danger)),
+                ),
+              ];
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _activityColor(String type) {
+    switch (type) {
+      case 'Tarefa':
+        return const Color(0xFFFF7043);
+      case 'Questionário':
+        return const Color(0xFFAB47BC);
+      case 'Pesquisa':
+        return const Color(0xFF26A69A);
+      case 'Escolha':
+        return const Color(0xFFEF5350);
+      case 'Fórum':
+        return AppTheme.primary;
+      case 'Arquivo':
+        return AppTheme.accent;
+      case 'URL':
+        return const Color(0xFF42A5F5);
+      case 'Página':
+        return const Color(0xFF66BB6A);
+      case 'Pasta':
+        return const Color(0xFFFFCA28);
+      case 'Wiki':
+        return const Color(0xFF8D6E63);
+      case 'Glossário':
+        return const Color(0xFF78909C);
+      case 'Lição':
+        return const Color(0xFF5C6BC0);
+      case 'H5P':
+      case 'Conteúdo interativo':
+        return const Color(0xFF29B6F6);
+      case 'Base de dados':
+        return const Color(0xFFEC407A);
+      case 'Diário':
+        return const Color(0xFF9CCC65);
+      case 'Presença':
+        return const Color(0xFF26C6DA);
+      case 'ConferênciaWeb':
+      case 'Jitsi':
+        return const Color(0xFF7E57C2);
+      default:
+        return AppTheme.textSecondary;
+    }
+  }
+
+  static const _activityTypes = [
+    DropdownMenuItem(value: 'Tarefa', child: Text('Tarefa')),
+    DropdownMenuItem(value: 'Questionário', child: Text('Questionário')),
+    DropdownMenuItem(value: 'Pesquisa', child: Text('Pesquisa')),
+    DropdownMenuItem(value: 'Escolha', child: Text('Escolha')),
+    DropdownMenuItem(value: 'Fórum', child: Text('Fórum')),
+    DropdownMenuItem(value: 'Arquivo', child: Text('Arquivo')),
+    DropdownMenuItem(value: 'URL', child: Text('URL')),
+    DropdownMenuItem(value: 'Página', child: Text('Página')),
+    DropdownMenuItem(value: 'Pasta', child: Text('Pasta')),
+    DropdownMenuItem(value: 'Wiki', child: Text('Wiki')),
+    DropdownMenuItem(value: 'Glossário', child: Text('Glossário')),
+    DropdownMenuItem(value: 'Lição', child: Text('Lição')),
+    DropdownMenuItem(value: 'H5P', child: Text('H5P')),
+    DropdownMenuItem(
+        value: 'Conteúdo interativo', child: Text('Conteúdo interativo')),
+    DropdownMenuItem(value: 'Base de dados', child: Text('Base de dados')),
+    DropdownMenuItem(value: 'Diário', child: Text('Diário')),
+    DropdownMenuItem(value: 'Presença', child: Text('Presença')),
+    DropdownMenuItem(value: 'ConferênciaWeb', child: Text('ConferênciaWeb')),
+    DropdownMenuItem(value: 'Jitsi', child: Text('Jitsi')),
+    DropdownMenuItem(value: 'Livro', child: Text('Livro')),
+    DropdownMenuItem(value: 'Pacote SCORM', child: Text('Pacote SCORM')),
+    DropdownMenuItem(
+        value: 'Conteúdo do pacote IMS', child: Text('Conteúdo do pacote IMS')),
+    DropdownMenuItem(
+        value: 'Certificado Simples', child: Text('Certificado Simples')),
+    DropdownMenuItem(value: 'Checklist', child: Text('Checklist')),
+    DropdownMenuItem(value: 'GeoGebra', child: Text('GeoGebra')),
+    DropdownMenuItem(
+        value: 'Laboratório de Avaliação',
+        child: Text('Laboratório de Avaliação')),
+    DropdownMenuItem(
+        value: 'Laboratório Virtual', child: Text('Laboratório Virtual')),
+    DropdownMenuItem(value: 'Quizventure', child: Text('Quizventure')),
+    DropdownMenuItem(
+        value: 'Atividade Hot Potatoes', child: Text('Atividade Hot Potatoes')),
+    DropdownMenuItem(
+        value: 'Área de texto e mídia', child: Text('Área de texto e mídia')),
+    DropdownMenuItem(value: 'Outro', child: Text('Outro')),
+  ];
+
+  void _showAddSectionDialog(BuildContext context, ConfigController ctrl) {
+    final nameCtrl = TextEditingController();
+    DateTime selectedDate = ctrl.current!.semesterStartDate;
+
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Nova Seção'),
+          content: SizedBox(
+            width: 400,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Nome da seção',
+                    hintText: 'Ex: SEMANA 1 - Introdução',
+                  ),
+                  autofocus: true,
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading:
+                      const Icon(Icons.calendar_today, color: AppTheme.accent),
+                  title: Text(_df.format(selectedDate)),
+                  subtitle: const Text('Data da seção'),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: ctx,
+                      initialDate: selectedDate,
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime(2030),
+                    );
+                    if (picked != null) {
+                      setState(() => selectedDate = picked);
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (nameCtrl.text.trim().isNotEmpty) {
+                  ctrl.addSection(nameCtrl.text.trim(), selectedDate);
+                  Navigator.pop(context);
+                }
+              },
+              child: const Text('Adicionar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEditSectionDialog(
+      BuildContext context, SectionEntry section, ConfigController ctrl) {
+    final nameCtrl = TextEditingController(text: section.name);
+    final daysCtrl =
+        TextEditingController(text: section.referenceDaysOffset.toString());
+
+    final sync = context.read<SyncController>();
+    final hasMoodleData = sync.moodleSections.isNotEmpty;
+    int? selectedMoodleSectionId = section.moodleSectionId;
+    String? selectedMoodleSectionName;
+
+    if (selectedMoodleSectionId != null && hasMoodleData) {
+      for (final ms in sync.moodleSections) {
+        if (ms.id == selectedMoodleSectionId) {
+          selectedMoodleSectionName = ms.name;
+          break;
+        }
+      }
+    }
+
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Editar Seção'),
+          content: SizedBox(
+            width: 400,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Nome'),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: daysCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Dias a partir do início do semestre',
+                    hintText: '0',
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                if (hasMoodleData) ...[
+                  const SizedBox(height: 16),
+                  InkWell(
+                    onTap: () async {
+                      final result = await _showMoodleSectionPicker(
+                          ctx, sync.moodleSections, selectedMoodleSectionId);
+                      if (result != null) {
+                        setState(() {
+                          selectedMoodleSectionId = result.id;
+                          selectedMoodleSectionName = result.name;
+                        });
+                      }
+                    },
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: 'Seção Moodle',
+                        suffixIcon: selectedMoodleSectionId != null
+                            ? IconButton(
+                                icon: const Icon(Icons.close,
+                                    size: 18, color: AppTheme.danger),
+                                onPressed: () => setState(() {
+                                  selectedMoodleSectionId = null;
+                                  selectedMoodleSectionName = null;
+                                }),
+                              )
+                            : const Icon(Icons.arrow_drop_down),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            selectedMoodleSectionId != null
+                                ? Icons.link
+                                : Icons.link_off,
+                            size: 18,
+                            color: selectedMoodleSectionId != null
+                                ? AppTheme.accentGreen
+                                : AppTheme.textSecondary,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              selectedMoodleSectionId != null
+                                  ? (selectedMoodleSectionName ??
+                                      'ID: $selectedMoodleSectionId')
+                                  : 'Selecionar seção...',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: selectedMoodleSectionId != null
+                                    ? AppTheme.textPrimary
+                                    : AppTheme.textSecondary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                ctrl.updateSection(
+                  section.id,
+                  name: nameCtrl.text.trim(),
+                  referenceDaysOffset: int.tryParse(daysCtrl.text.trim()) ?? 0,
+                );
+                ctrl.linkSectionToMoodle(section.id, selectedMoodleSectionId);
+                Navigator.pop(context);
+              },
+              child: const Text('Salvar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatActivityDate(DateTime? date, bool withTime) {
+    if (date == null) return 'Sem data';
+    return withTime ? _dfh.format(date) : _df.format(date);
+  }
+
+  Widget _buildTimeSelector(BuildContext context,
+      {required String label,
+      required int? minutes,
+      required ValueChanged<int?> onChanged}) {
+    final h = minutes != null ? minutes ~/ 60 : null;
+    final m = minutes != null ? minutes % 60 : null;
+    final display = minutes != null
+        ? '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}'
+        : 'Selecionar';
+    return ListTile(
+      dense: true,
+      contentPadding: const EdgeInsets.only(left: 28),
+      leading: const Icon(Icons.access_time, size: 18, color: AppTheme.accent),
+      title: Text(display,
+          style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary)),
+      subtitle: Text(label,
+          style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      trailing: minutes != null
+          ? IconButton(
+              icon: const Icon(Icons.close, size: 16, color: AppTheme.danger),
+              onPressed: () => onChanged(null),
+            )
+          : null,
+      onTap: () async {
+        final picked = await showTimePicker(
+          context: context,
+          initialTime: minutes != null
+              ? TimeOfDay(hour: h!, minute: m!)
+              : const TimeOfDay(hour: 8, minute: 0),
+        );
+        if (picked != null) {
+          onChanged(picked.hour * 60 + picked.minute);
+        }
+      },
+    );
+  }
+
+  void _showAddActivityDialog(BuildContext context, String sectionId,
+      ConfigController ctrl, DateTime sectionRefDate) {
+    final nameCtrl = TextEditingController();
+    final openOffsetCtrl = TextEditingController();
+    final closeOffsetCtrl = TextEditingController();
+    String type = 'Tarefa';
+    int? openTimeMinutes;
+    int? closeTimeMinutes;
+    int? selectedMoodleId;
+    String? selectedMoodleName;
+
+    final sync = context.read<SyncController>();
+    final hasMoodleData = sync.moodleSections.isNotEmpty;
+
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setState) {
+          final withTime = _needsTime(type);
+          final openOffset = int.tryParse(openOffsetCtrl.text);
+          final closeOffset = int.tryParse(closeOffsetCtrl.text);
+          final openPreview = openOffset != null
+              ? sectionRefDate.add(Duration(days: openOffset))
+              : null;
+          final closePreview = closeOffset != null
+              ? sectionRefDate.add(Duration(days: closeOffset))
+              : null;
+          return AlertDialog(
+            title: const Text('Nova Atividade'),
+            content: SizedBox(
+              width: 420,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Nome da atividade'),
+                      autofocus: true,
+                    ),
+                    const SizedBox(height: 12),
+                    if (hasMoodleData)
+                      _buildMoodleModuleField(
+                        ctx,
+                        sync,
+                        selectedMoodleId,
+                        selectedMoodleName,
+                        type,
+                        (mod) => setState(() {
+                          selectedMoodleId = mod.id;
+                          selectedMoodleName = mod.name;
+                          final mappedType = _modnameToType[mod.modname];
+                          if (mappedType != null) type = mappedType;
+                        }),
+                        () => setState(() {
+                          selectedMoodleId = null;
+                          selectedMoodleName = null;
+                        }),
+                      )
+                    else
+                      DropdownButtonFormField<String>(
+                        initialValue: type,
+                        decoration: const InputDecoration(labelText: 'Tipo'),
+                        dropdownColor: AppTheme.bgSurface,
+                        items: _activityTypes,
+                        onChanged: (v) => setState(() => type = v!),
+                      ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Icon(Icons.event,
+                            color: AppTheme.accentGreen, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: openOffsetCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(
+                              labelText: 'Abertura (dias após ref.)',
+                              helperText: openPreview != null
+                                  ? _df.format(openPreview)
+                                  : 'Ref: ${_df.format(sectionRefDate)}',
+                              helperStyle: const TextStyle(
+                                  color: AppTheme.accent, fontSize: 11),
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (withTime && openOffset != null) ...[
+                      const SizedBox(height: 4),
+                      _buildTimeSelector(
+                        ctx,
+                        label: 'Hora de abertura',
+                        minutes: openTimeMinutes,
+                        onChanged: (m) => setState(() => openTimeMinutes = m),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Icon(Icons.event_busy,
+                            color: AppTheme.danger, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: closeOffsetCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(
+                              labelText: 'Encerramento (dias após ref.)',
+                              helperText: closePreview != null
+                                  ? _df.format(closePreview)
+                                  : null,
+                              helperStyle: const TextStyle(
+                                  color: AppTheme.accent, fontSize: 11),
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (withTime && closeOffset != null) ...[
+                      const SizedBox(height: 4),
+                      _buildTimeSelector(
+                        ctx,
+                        label: 'Hora de encerramento',
+                        minutes: closeTimeMinutes,
+                        onChanged: (m) => setState(() => closeTimeMinutes = m),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  if (nameCtrl.text.trim().isNotEmpty) {
+                    ctrl.addActivity(
+                      sectionId,
+                      nameCtrl.text.trim(),
+                      type,
+                      openOffsetDays: int.tryParse(openOffsetCtrl.text),
+                      closeOffsetDays: int.tryParse(closeOffsetCtrl.text),
+                      openTimeMinutes: withTime ? openTimeMinutes : null,
+                      closeTimeMinutes: withTime ? closeTimeMinutes : null,
+                      moodleModuleId: selectedMoodleId,
+                    );
+                    Navigator.pop(context);
+                  }
+                },
+                child: const Text('Adicionar'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showEditActivityDialog(BuildContext context, String sectionId,
+      ActivityEntry activity, ConfigController ctrl, DateTime sectionRefDate) {
+    final nameCtrl = TextEditingController(text: activity.name);
+    final openOffsetCtrl =
+        TextEditingController(text: activity.openOffsetDays?.toString() ?? '');
+    final closeOffsetCtrl =
+        TextEditingController(text: activity.closeOffsetDays?.toString() ?? '');
+    String type = activity.activityType;
+    int? openTimeMinutes = activity.openTimeMinutes;
+    int? closeTimeMinutes = activity.closeTimeMinutes;
+    int? selectedMoodleId = activity.moodleModuleId;
+    String? selectedMoodleName;
+
+    final sync = context.read<SyncController>();
+    final hasMoodleData = sync.moodleSections.isNotEmpty;
+
+    // Tentar obter o nome do módulo Moodle vinculado
+    if (selectedMoodleId != null && hasMoodleData) {
+      for (final ms in sync.moodleSections) {
+        for (final mod in ms.modules) {
+          if (mod.id == selectedMoodleId) {
+            selectedMoodleName = mod.name;
+            break;
+          }
+        }
+        if (selectedMoodleName != null) break;
+      }
+    }
+
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setState) {
+          final withTime = _needsTime(type);
+          final openOffset = int.tryParse(openOffsetCtrl.text);
+          final closeOffset = int.tryParse(closeOffsetCtrl.text);
+          final openPreview = openOffset != null
+              ? sectionRefDate.add(Duration(days: openOffset))
+              : null;
+          final closePreview = closeOffset != null
+              ? sectionRefDate.add(Duration(days: closeOffset))
+              : null;
+          return AlertDialog(
+            title: const Text('Editar Atividade'),
+            content: SizedBox(
+              width: 420,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Nome da atividade'),
+                    ),
+                    const SizedBox(height: 12),
+                    if (hasMoodleData)
+                      _buildMoodleModuleField(
+                        ctx,
+                        sync,
+                        selectedMoodleId,
+                        selectedMoodleName,
+                        type,
+                        (mod) => setState(() {
+                          selectedMoodleId = mod.id;
+                          selectedMoodleName = mod.name;
+                          final mappedType = _modnameToType[mod.modname];
+                          if (mappedType != null) type = mappedType;
+                        }),
+                        () => setState(() {
+                          selectedMoodleId = null;
+                          selectedMoodleName = null;
+                        }),
+                      )
+                    else
+                      DropdownButtonFormField<String>(
+                        initialValue: type,
+                        decoration: const InputDecoration(labelText: 'Tipo'),
+                        dropdownColor: AppTheme.bgSurface,
+                        items: _activityTypes,
+                        onChanged: (v) => setState(() => type = v!),
+                      ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Icon(Icons.event,
+                            color: AppTheme.accentGreen, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: openOffsetCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(
+                              labelText: 'Abertura (dias após ref.)',
+                              helperText: openPreview != null
+                                  ? _df.format(openPreview)
+                                  : 'Ref: ${_df.format(sectionRefDate)}',
+                              helperStyle: const TextStyle(
+                                  color: AppTheme.accent, fontSize: 11),
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (withTime && openOffset != null) ...[
+                      const SizedBox(height: 4),
+                      _buildTimeSelector(
+                        ctx,
+                        label: 'Hora de abertura',
+                        minutes: openTimeMinutes,
+                        onChanged: (m) => setState(() => openTimeMinutes = m),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Icon(Icons.event_busy,
+                            color: AppTheme.danger, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: closeOffsetCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(
+                              labelText: 'Encerramento (dias após ref.)',
+                              helperText: closePreview != null
+                                  ? _df.format(closePreview)
+                                  : null,
+                              helperStyle: const TextStyle(
+                                  color: AppTheme.accent, fontSize: 11),
+                            ),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (withTime && closeOffset != null) ...[
+                      const SizedBox(height: 4),
+                      _buildTimeSelector(
+                        ctx,
+                        label: 'Hora de encerramento',
+                        minutes: closeTimeMinutes,
+                        onChanged: (m) => setState(() => closeTimeMinutes = m),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  if (nameCtrl.text.trim().isNotEmpty) {
+                    ctrl.updateActivity(
+                      sectionId,
+                      activity.id,
+                      name: nameCtrl.text.trim(),
+                      type: type,
+                      openOffsetDays: int.tryParse(openOffsetCtrl.text),
+                      closeOffsetDays: int.tryParse(closeOffsetCtrl.text),
+                      openTimeMinutes: withTime ? openTimeMinutes : null,
+                      closeTimeMinutes: withTime ? closeTimeMinutes : null,
+                      moodleModuleId: selectedMoodleId,
+                    );
+                    Navigator.pop(context);
+                  }
+                },
+                child: const Text('Salvar'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildMoodleModuleField(
+    BuildContext context,
+    SyncController sync,
+    int? selectedId,
+    String? selectedName,
+    String currentType,
+    void Function(MoodleModule mod) onSelected,
+    VoidCallback onClear,
+  ) {
+    return InkWell(
+      onTap: () async {
+        final result = await _showMoodleModulePicker(context);
+        if (result != null) onSelected(result);
+      },
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Atividade Moodle',
+          suffixIcon: selectedId != null
+              ? IconButton(
+                  icon:
+                      const Icon(Icons.close, size: 18, color: AppTheme.danger),
+                  onPressed: onClear,
+                )
+              : const Icon(Icons.arrow_drop_down),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              selectedId != null ? Icons.link : Icons.link_off,
+              size: 18,
+              color: selectedId != null
+                  ? AppTheme.accentGreen
+                  : AppTheme.textSecondary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    selectedId != null
+                        ? (selectedName ?? 'ID: $selectedId')
+                        : 'Selecionar atividade...',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: selectedId != null
+                          ? AppTheme.textPrimary
+                          : AppTheme.textSecondary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (selectedId != null)
+                    Text(
+                      '$currentType • ID: $selectedId',
+                      style: const TextStyle(
+                          fontSize: 11, color: AppTheme.textSecondary),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<MoodleModule?> _showMoodleModulePicker(BuildContext context) async {
+    final sync = context.read<SyncController>();
+    final sections = sync.moodleSections;
+
+    if (sections.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Nenhuma atividade do Moodle carregada. Faça login e acesse a página de sincronização primeiro.'),
+        ),
+      );
+      return null;
+    }
+
+    return showDialog<MoodleModule>(
+      context: context,
+      builder: (_) {
+        String filter = '';
+        return StatefulBuilder(
+          builder: (ctx, setState) {
+            final lowerFilter = filter.toLowerCase();
+            return AlertDialog(
+              title: const Text('Selecionar Atividade do Moodle'),
+              content: SizedBox(
+                width: 500,
+                height: 450,
+                child: Column(
+                  children: [
+                    TextField(
+                      decoration: const InputDecoration(
+                        labelText: 'Buscar...',
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                      onChanged: (v) => setState(() => filter = v),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView(
+                        children: [
+                          for (final sec in sections)
+                            if (sec.modules.any((m) =>
+                                lowerFilter.isEmpty ||
+                                m.name.toLowerCase().contains(lowerFilter) ||
+                                m.modname.toLowerCase().contains(lowerFilter)))
+                              ExpansionTile(
+                                title: Text(sec.name,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13)),
+                                initiallyExpanded: lowerFilter.isNotEmpty,
+                                children: [
+                                  for (final mod in sec.modules)
+                                    if (lowerFilter.isEmpty ||
+                                        mod.name
+                                            .toLowerCase()
+                                            .contains(lowerFilter) ||
+                                        mod.modname
+                                            .toLowerCase()
+                                            .contains(lowerFilter))
+                                      ListTile(
+                                        dense: true,
+                                        leading: Icon(
+                                          Icons.extension,
+                                          size: 18,
+                                          color: _activityColor(
+                                              _modnameToType[mod.modname] ??
+                                                  'Outro'),
+                                        ),
+                                        title: Text(mod.name,
+                                            style:
+                                                const TextStyle(fontSize: 13)),
+                                        subtitle: Text(
+                                            '${_modnameToType[mod.modname] ?? mod.modname} • ID: ${mod.id}',
+                                            style:
+                                                const TextStyle(fontSize: 11)),
+                                        onTap: () => Navigator.pop(ctx, mod),
+                                      ),
+                                ],
+                              ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancelar'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<MoodleSection?> _showMoodleSectionPicker(BuildContext context,
+      List<MoodleSection> sections, int? currentId) async {
+    String filter = '';
+    return showDialog<MoodleSection>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (ctx, setState) {
+          final lowerFilter = filter.toLowerCase();
+          final filtered = sections
+              .where((s) =>
+                  lowerFilter.isEmpty ||
+                  s.name.toLowerCase().contains(lowerFilter))
+              .toList();
+          return AlertDialog(
+            title: const Text('Selecionar Seção do Moodle'),
+            content: SizedBox(
+              width: 450,
+              height: 350,
+              child: Column(
+                children: [
+                  TextField(
+                    decoration: const InputDecoration(
+                      labelText: 'Buscar...',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onChanged: (v) => setState(() => filter = v),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: filtered.length,
+                      itemBuilder: (_, i) {
+                        final sec = filtered[i];
+                        final isSelected = sec.id == currentId;
+                        return ListTile(
+                          dense: true,
+                          selected: isSelected,
+                          leading: Icon(Icons.folder_outlined,
+                              size: 20,
+                              color: isSelected
+                                  ? AppTheme.accentGreen
+                                  : AppTheme.textSecondary),
+                          title: Text(sec.name,
+                              style: const TextStyle(fontSize: 13)),
+                          subtitle: Text(
+                              'Seção ${sec.section} • ${sec.modules.length} atividades',
+                              style: const TextStyle(fontSize: 11)),
+                          onTap: () => Navigator.pop(ctx, sec),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancelar'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showRenameDialog(
+      BuildContext context, CourseConfig config, ConfigController ctrl) {
+    final nameCtrl = TextEditingController(text: config.name);
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Renomear'),
+        content: TextField(
+          controller: nameCtrl,
+          decoration: const InputDecoration(labelText: 'Nome'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (nameCtrl.text.trim().isNotEmpty) {
+                ctrl.updateConfigName(nameCtrl.text.trim());
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Salvar'),
+          ),
+        ],
+      ),
+    );
+  }
+}
