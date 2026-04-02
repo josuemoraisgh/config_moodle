@@ -12,6 +12,7 @@ import 'package:config_moodle/presentation/controllers/auth_controller.dart';
 import 'package:config_moodle/presentation/controllers/sync_controller.dart';
 import 'package:config_moodle/presentation/widgets/common_widgets.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -58,21 +59,23 @@ class _HomePageState extends State<HomePage> {
               Expanded(
                 child: configCtrl.loading
                     ? const Center(
-                        child:
-                            CircularProgressIndicator(color: AppTheme.primary))
+                        child: CircularProgressIndicator(
+                          color: AppTheme.primary,
+                        ),
+                      )
                     : configCtrl.configs.isEmpty
-                        ? EmptyState(
-                            icon: Icons.table_chart_outlined,
-                            title: 'Nenhuma configuração',
-                            subtitle:
-                                'Importe uma planilha ou crie uma nova configuração para começar.',
-                            action: GradientButton(
-                              label: 'Importar Planilha',
-                              icon: Icons.upload_file,
-                              onPressed: () => _importSpreadsheet(context),
-                            ),
-                          )
-                        : _buildGrid(context, configCtrl, df),
+                    ? EmptyState(
+                        icon: Icons.table_chart_outlined,
+                        title: 'Nenhuma configuração',
+                        subtitle:
+                            'Importe uma planilha ou crie uma nova configuração para começar.',
+                        action: GradientButton(
+                          label: 'Importar Planilha',
+                          icon: Icons.upload_file,
+                          onPressed: () => _importSpreadsheet(context),
+                        ),
+                      )
+                    : _buildGrid(context, configCtrl, df),
               ),
             ],
           ),
@@ -99,8 +102,11 @@ class _HomePageState extends State<HomePage> {
               gradient: AppTheme.primaryGradient,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.settings_suggest,
-                color: Colors.white, size: 24),
+            child: const Icon(
+              Icons.settings_suggest,
+              color: Colors.white,
+              size: 24,
+            ),
           ),
           const SizedBox(width: 12),
           const Text(
@@ -149,7 +155,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildGrid(
-      BuildContext context, ConfigController ctrl, DateFormat df) {
+    BuildContext context,
+    ConfigController ctrl,
+    DateFormat df,
+  ) {
     return Padding(
       padding: const EdgeInsets.all(20),
       child: LayoutBuilder(
@@ -157,10 +166,10 @@ class _HomePageState extends State<HomePage> {
           final crossAxisCount = constraints.maxWidth > 1200
               ? 4
               : constraints.maxWidth > 800
-                  ? 3
-                  : constraints.maxWidth > 500
-                      ? 2
-                      : 1;
+              ? 3
+              : constraints.maxWidth > 500
+              ? 2
+              : 1;
           return GridView.builder(
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: crossAxisCount,
@@ -179,8 +188,12 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _buildConfigCard(BuildContext context, dynamic config,
-      ConfigController ctrl, DateFormat df) {
+  Widget _buildConfigCard(
+    BuildContext context,
+    dynamic config,
+    ConfigController ctrl,
+    DateFormat df,
+  ) {
     return GlassCard(
       useGradient: true,
       onTap: () => context.push('/editor/${config.id}'),
@@ -195,13 +208,19 @@ class _HomePageState extends State<HomePage> {
                   color: AppTheme.primary.withAlpha(30),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Icon(Icons.table_chart,
-                    color: AppTheme.primary, size: 20),
+                child: const Icon(
+                  Icons.table_chart,
+                  color: AppTheme.primary,
+                  size: 20,
+                ),
               ),
               const Spacer(),
               PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert,
-                    color: AppTheme.textSecondary, size: 20),
+                icon: const Icon(
+                  Icons.more_vert,
+                  color: AppTheme.textSecondary,
+                  size: 20,
+                ),
                 color: AppTheme.bgSurface,
                 onSelected: (value) async {
                   if (value == 'delete') {
@@ -210,7 +229,8 @@ class _HomePageState extends State<HomePage> {
                       builder: (_) => AlertDialog(
                         title: const Text('Excluir configuração?'),
                         content: Text(
-                            'Tem certeza que deseja excluir "${config.name}"?'),
+                          'Tem certeza que deseja excluir "${config.name}"?',
+                        ),
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.pop(context, false),
@@ -218,8 +238,10 @@ class _HomePageState extends State<HomePage> {
                           ),
                           TextButton(
                             onPressed: () => Navigator.pop(context, true),
-                            child: const Text('Excluir',
-                                style: TextStyle(color: AppTheme.danger)),
+                            child: const Text(
+                              'Excluir',
+                              style: TextStyle(color: AppTheme.danger),
+                            ),
                           ),
                         ],
                       ),
@@ -246,8 +268,11 @@ class _HomePageState extends State<HomePage> {
                     value: 'export',
                     child: Row(
                       children: [
-                        Icon(Icons.download,
-                            size: 18, color: AppTheme.accentGreen),
+                        Icon(
+                          Icons.download,
+                          size: 18,
+                          color: AppTheme.accentGreen,
+                        ),
                         SizedBox(width: 8),
                         Text('Exportar XLSX'),
                       ],
@@ -303,11 +328,15 @@ class _HomePageState extends State<HomePage> {
                 onTap: () => _exportSpreadsheet(context, config.id),
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     border: Border.all(
-                        color: AppTheme.accent.withAlpha(100), width: 1),
+                      color: AppTheme.accent.withAlpha(100),
+                      width: 1,
+                    ),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: const Row(
@@ -315,11 +344,14 @@ class _HomePageState extends State<HomePage> {
                     children: [
                       Icon(Icons.download, size: 14, color: AppTheme.accent),
                       SizedBox(width: 4),
-                      Text('XLSX',
-                          style: TextStyle(
-                              fontSize: 11,
-                              color: AppTheme.accent,
-                              fontWeight: FontWeight.w600)),
+                      Text(
+                        'XLSX',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppTheme.accent,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -384,8 +416,10 @@ class _HomePageState extends State<HomePage> {
                   color: AppTheme.accentGreen.withAlpha(30),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(Icons.file_download,
-                    color: AppTheme.accentGreen),
+                child: const Icon(
+                  Icons.file_download,
+                  color: AppTheme.accentGreen,
+                ),
               ),
               title: const Text('Baixar Planilha Modelo'),
               subtitle: const Text('Gerar template .xlsx com formato correto'),
@@ -402,8 +436,10 @@ class _HomePageState extends State<HomePage> {
                   color: AppTheme.primary.withAlpha(30),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child:
-                    const Icon(Icons.cloud_download, color: AppTheme.primary),
+                child: const Icon(
+                  Icons.cloud_download,
+                  color: AppTheme.primary,
+                ),
               ),
               title: const Text('Importar do Moodle'),
               subtitle: const Text('Criar config a partir de um curso'),
@@ -440,9 +476,9 @@ class _HomePageState extends State<HomePage> {
           ElevatedButton(
             onPressed: () {
               if (nameCtrl.text.trim().isNotEmpty) {
-                context
-                    .read<ConfigController>()
-                    .createEmpty(nameCtrl.text.trim());
+                context.read<ConfigController>().createEmpty(
+                  nameCtrl.text.trim(),
+                );
                 Navigator.pop(context);
               }
             },
@@ -508,8 +544,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _exportSpreadsheet(BuildContext context, String id) async {
-    final bytes =
-        await context.read<ConfigController>().exportSpreadsheetBytes(id);
+    final bytes = await context.read<ConfigController>().exportSpreadsheetBytes(
+      id,
+    );
     if (bytes == null || !context.mounted) return;
 
     final result = await FilePicker.platform.saveFile(
@@ -618,7 +655,8 @@ class _HomePageState extends State<HomePage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-                'Importado "${config.name}" com ${config.sections.length} seções.'),
+              'Importado "${config.name}" com ${config.sections.length} seções.',
+            ),
             backgroundColor: AppTheme.accentGreen,
           ),
         );
@@ -635,11 +673,14 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void _showLoginDialog(BuildContext context) {
-    final urlCtrl = TextEditingController(text: 'https://');
+  void _showLoginDialog(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedUrl = prefs.getString('last_moodle_url') ?? 'https://';
+    final urlCtrl = TextEditingController(text: savedUrl);
     final userCtrl = TextEditingController();
     final passCtrl = TextEditingController();
 
+    if (!context.mounted) return;
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
@@ -678,8 +719,10 @@ class _HomePageState extends State<HomePage> {
                   ),
                   if (auth.error != null) ...[
                     const SizedBox(height: 12),
-                    Text(auth.error!,
-                        style: const TextStyle(color: AppTheme.danger)),
+                    Text(
+                      auth.error!,
+                      style: const TextStyle(color: AppTheme.danger),
+                    ),
                   ],
                 ],
               ),
@@ -693,12 +736,16 @@ class _HomePageState extends State<HomePage> {
                 onPressed: auth.loading
                     ? null
                     : () async {
+                        final url = urlCtrl.text.trim();
                         final ok = await auth.login(
-                          urlCtrl.text.trim(),
+                          url,
                           userCtrl.text.trim(),
                           passCtrl.text,
                         );
-                        if (ok && context.mounted) Navigator.pop(context);
+                        if (ok) {
+                          prefs.setString('last_moodle_url', url);
+                          if (context.mounted) Navigator.pop(context);
+                        }
                       },
                 child: auth.loading
                     ? const SizedBox(
@@ -753,8 +800,10 @@ class _HomePageState extends State<HomePage> {
               auth.logout();
               Navigator.pop(context);
             },
-            child: const Text('Desconectar',
-                style: TextStyle(color: AppTheme.danger)),
+            child: const Text(
+              'Desconectar',
+              style: TextStyle(color: AppTheme.danger),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context),
@@ -795,9 +844,11 @@ class _MoodleCoursePickerDialogState extends State<_MoodleCoursePickerDialog> {
     if (_filter.isEmpty) return widget.courses;
     final lower = _filter.toLowerCase();
     return widget.courses
-        .where((c) =>
-            c.fullname.toLowerCase().contains(lower) ||
-            c.shortname.toLowerCase().contains(lower))
+        .where(
+          (c) =>
+              c.fullname.toLowerCase().contains(lower) ||
+              c.shortname.toLowerCase().contains(lower),
+        )
         .toList();
   }
 
@@ -823,8 +874,11 @@ class _MoodleCoursePickerDialogState extends State<_MoodleCoursePickerDialog> {
             Expanded(
               child: _filtered.isEmpty
                   ? const Center(
-                      child: Text('Nenhum curso encontrado.',
-                          style: TextStyle(color: AppTheme.textSecondary)))
+                      child: Text(
+                        'Nenhum curso encontrado.',
+                        style: TextStyle(color: AppTheme.textSecondary),
+                      ),
+                    )
                   : ListView.builder(
                       itemCount: _filtered.length,
                       itemBuilder: (_, i) {
@@ -846,11 +900,17 @@ class _MoodleCoursePickerDialogState extends State<_MoodleCoursePickerDialog> {
                                 : AppTheme.textSecondary,
                             size: 20,
                           ),
-                          title: Text(course.fullname,
-                              style: const TextStyle(fontSize: 13)),
-                          subtitle: Text(course.shortname,
-                              style: const TextStyle(
-                                  fontSize: 11, color: AppTheme.textSecondary)),
+                          title: Text(
+                            course.fullname,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                          subtitle: Text(
+                            course.shortname,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
                           onTap: () => setState(() => _selected = course),
                         );
                       },
@@ -886,10 +946,12 @@ class _MoodleCoursePickerDialogState extends State<_MoodleCoursePickerDialog> {
           onPressed: _selected == null
               ? null
               : () => Navigator.pop(
-                    context,
-                    _MoodleImportResult(
-                        course: _selected!, semesterStart: _semesterStart),
+                  context,
+                  _MoodleImportResult(
+                    course: _selected!,
+                    semesterStart: _semesterStart,
                   ),
+                ),
           child: const Text('Importar'),
         ),
       ],

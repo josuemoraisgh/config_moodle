@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:config_moodle/core/theme/app_theme.dart';
@@ -524,7 +525,7 @@ class _SyncPreviewPageState extends State<SyncPreviewPage> {
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: 200),
                   child: SingleChildScrollView(
-                    child: Text(
+                    child: SelectableText(
                       syncCtrl.error!,
                       style: const TextStyle(
                         color: AppTheme.danger,
@@ -532,6 +533,25 @@ class _SyncPreviewPageState extends State<SyncPreviewPage> {
                       ),
                       textAlign: TextAlign.center,
                     ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: syncCtrl.error!));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Log copiado para a área de transferência',
+                        ),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.copy, size: 16),
+                  label: const Text('Copiar log'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppTheme.textSecondary,
                   ),
                 ),
               ],

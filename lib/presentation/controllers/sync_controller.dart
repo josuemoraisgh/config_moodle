@@ -200,6 +200,8 @@ class SyncController extends ChangeNotifier {
     // Flags para pular operações sem permissão após o 1º erro
     bool canUpdateNames = true;
     int skippedNameOps = 0;
+    String?
+    firstAccessErrorDetail; // Detalhe do 1º erro de acesso para diagnóstico
 
     for (final match in _matches) {
       step++;
@@ -239,6 +241,7 @@ class SyncController extends ChangeNotifier {
           } catch (e) {
             if (_isAccessError(e)) {
               canUpdateNames = false;
+              firstAccessErrorDetail ??= e.toString();
               skippedNameOps++;
             } else {
               errors.add('Seção "${match.local.name}": $e');
@@ -298,6 +301,7 @@ class SyncController extends ChangeNotifier {
             } catch (e) {
               if (_isAccessError(e)) {
                 canUpdateNames = false;
+                firstAccessErrorDetail ??= e.toString();
                 skippedNameOps++;
               } else {
                 errors.add('Nome label "${am.local.name}": $e');
@@ -315,6 +319,7 @@ class SyncController extends ChangeNotifier {
               } catch (e) {
                 if (_isAccessError(e)) {
                   canUpdateNames = false;
+                  firstAccessErrorDetail ??= e.toString();
                   skippedNameOps++;
                 } else {
                   errors.add('Conteúdo label "${am.local.name}": $e');
@@ -333,15 +338,11 @@ class SyncController extends ChangeNotifier {
     // Construir mensagem final
     final messages = <String>[];
     if (skippedNameOps > 0) {
+      final detail = firstAccessErrorDetail ?? 'Erro desconhecido';
       messages.add(
-        'Atualização de nomes não disponível ($skippedNameOps operações puladas).\n'
-        'A função "core_update_inplace_editable" não está habilitada '
-        'no serviço web do Moodle.\n\n'
-        'Para habilitar, o administrador do Moodle deve:\n'
-        '1. Ir em Administração > Plugins > Web services > Serviços Externos\n'
-        '2. Adicionar a função "core_update_inplace_editable" ao serviço '
-        '"Serviço do Moodle Mobile" ou criar um serviço chamado '
-        '"config_moodle_service" com essa função.',
+        'Atualização de nomes não disponível ($skippedNameOps operações puladas).\n\n'
+        'Motivo: $detail\n\n'
+        'Faça logout e login novamente para renovar a sessão.',
       );
     }
     if (errors.isNotEmpty) {
@@ -361,14 +362,20 @@ class SyncController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Verifica se o erro é de controle de acesso / permissão.
+  /// Verifica se o erro é de controle de acesso / permissão / sessão AJAX.
   bool _isAccessError(Object e) {
     final msg = e.toString().toLowerCase();
     return msg.contains('controle de acesso') ||
         msg.contains('access control') ||
         msg.contains('accessexception') ||
         msg.contains('not allowed') ||
-        msg.contains('not available');
+        msg.contains('not available') ||
+        msg.contains('não disponível') ||
+        msg.contains('sessão ajax') ||
+        msg.contains('sessão expirada') ||
+        msg.contains('sessão foi finalizada') ||
+        msg.contains('expirou') ||
+        msg.contains('logintoken');
   }
 
   void clearMatches() {
