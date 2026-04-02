@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -10,6 +11,7 @@ import 'package:config_moodle/presentation/controllers/auth_controller.dart';
 import 'package:config_moodle/presentation/controllers/sync_controller.dart';
 import 'package:config_moodle/core/utils/macro_resolver.dart';
 import 'package:config_moodle/presentation/widgets/common_widgets.dart';
+import 'package:config_moodle/presentation/widgets/inline_edit_text.dart';
 
 class TableEditorPage extends StatefulWidget {
   final String courseConfigId;
@@ -23,6 +25,11 @@ class _TableEditorPageState extends State<TableEditorPage> {
   final _df = DateFormat('dd/MM/yyyy');
   final _dfh = DateFormat('dd/MM/yyyy HH:mm');
   final _scrollController = ScrollController();
+  String? _hoveringSectionId;
+  bool _allExpanded = false;
+  int _expandToggleKey = 0;
+  bool _isDraggingSelection = false;
+  String? _hoveringActivityId;
 
   static const _typesWithTime = {
     'Tarefa',
@@ -77,7 +84,10 @@ class _TableEditorPageState extends State<TableEditorPage> {
         final sync = context.read<SyncController>();
         if (sync.moodleSections.isEmpty) {
           await sync.loadMoodleSections(
-              auth.token, auth.baseUrl, config.moodleCourseId!);
+            auth.token,
+            auth.baseUrl,
+            config.moodleCourseId!,
+          );
         }
       }
     });
@@ -106,33 +116,44 @@ class _TableEditorPageState extends State<TableEditorPage> {
               Expanded(
                 child: ctrl.loading
                     ? const Center(
-                        child:
-                            CircularProgressIndicator(color: AppTheme.primary))
+                        child: CircularProgressIndicator(
+                          color: AppTheme.primary,
+                        ),
+                      )
                     : config == null
-                        ? const EmptyState(
-                            icon: Icons.error_outline,
-                            title: 'Configuração não encontrada',
-                            subtitle: 'Volte à tela inicial.',
-                          )
-                        : config.sections.isEmpty
-                            ? EmptyState(
-                                icon: Icons.view_list,
-                                title: 'Sem seções',
-                                subtitle: 'Adicione a primeira seção.',
-                                action: GradientButton(
-                                  label: 'Adicionar Seção',
-                                  icon: Icons.add,
-                                  onPressed: () =>
-                                      _showAddSectionDialog(context, ctrl),
-                                ),
-                              )
-                            : _buildSectionsList(context, config, ctrl),
+                    ? const EmptyState(
+                        icon: Icons.error_outline,
+                        title: 'Configuração não encontrada',
+                        subtitle: 'Volte à tela inicial.',
+                      )
+                    : config.sections.isEmpty
+                    ? EmptyState(
+                        icon: Icons.view_list,
+                        title: 'Sem seções',
+                        subtitle: 'Adicione a primeira seção.',
+                        action: GradientButton(
+                          label: 'Adicionar Seção',
+                          icon: Icons.add,
+                          onPressed: () => _showAddSectionDialog(context, ctrl),
+                        ),
+                      )
+                    : _buildSectionsList(context, config, ctrl),
               ),
             ],
           ),
         ),
       ),
-      floatingActionButton: config?.sections.isNotEmpty == true
+      floatingActionButton: ctrl.hasSelection
+          ? FloatingActionButton.extended(
+              heroTag: 'selection_info',
+              backgroundColor: AppTheme.accent,
+              icon: const Icon(Icons.close),
+              label: Text(
+                '${ctrl.selectedActivityIds.length} selecionada(s) — arraste pelo handle',
+              ),
+              onPressed: () => ctrl.clearSelection(),
+            )
+          : config?.sections.isNotEmpty == true
           ? FloatingActionButton(
               onPressed: () => _showAddSectionDialog(context, ctrl),
               child: const Icon(Icons.add),
@@ -141,8 +162,12 @@ class _TableEditorPageState extends State<TableEditorPage> {
     );
   }
 
-  Widget _buildTopBar(BuildContext context, CourseConfig? config,
-      ConfigController ctrl, AuthController auth) {
+  Widget _buildTopBar(
+    BuildContext context,
+    CourseConfig? config,
+    ConfigController ctrl,
+    AuthController auth,
+  ) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: Row(
@@ -163,7 +188,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
                     child: Text(
                       config != null
                           ? MacroResolver.resolve(
-                              config.name, config.semesterStartDate)
+                              config.name,
+                              config.semesterStartDate,
+                            )
                           : 'Carregando...',
                       style: const TextStyle(
                         fontSize: 20,
@@ -176,8 +203,11 @@ class _TableEditorPageState extends State<TableEditorPage> {
                   if (config != null)
                     Padding(
                       padding: const EdgeInsets.only(left: 4),
-                      child: Icon(Icons.edit_outlined,
-                          color: AppTheme.accentGreen, size: 18),
+                      child: Icon(
+                        Icons.edit_outlined,
+                        color: AppTheme.accentGreen,
+                        size: 18,
+                      ),
                     ),
                 ],
               ),
@@ -199,8 +229,12 @@ class _TableEditorPageState extends State<TableEditorPage> {
     );
   }
 
-  Widget _buildCourseChip(BuildContext context, CourseConfig config,
-      ConfigController ctrl, AuthController auth) {
+  Widget _buildCourseChip(
+    BuildContext context,
+    CourseConfig config,
+    ConfigController ctrl,
+    AuthController auth,
+  ) {
     final hasLinked = config.moodleCourseId != null;
     return ActionChip(
       avatar: Icon(
@@ -220,8 +254,12 @@ class _TableEditorPageState extends State<TableEditorPage> {
     );
   }
 
-  void _showCoursePickerDialog(BuildContext context, CourseConfig config,
-      ConfigController ctrl, AuthController auth) async {
+  void _showCoursePickerDialog(
+    BuildContext context,
+    CourseConfig config,
+    ConfigController ctrl,
+    AuthController auth,
+  ) async {
     final syncCtrl = context.read<SyncController>();
 
     // Carregar cursos se ainda não carregados
@@ -245,10 +283,12 @@ class _TableEditorPageState extends State<TableEditorPage> {
         builder: (ctx, setState) {
           final lowerFilter = filter.toLowerCase();
           final filtered = courses
-              .where((c) =>
-                  lowerFilter.isEmpty ||
-                  c.fullname.toLowerCase().contains(lowerFilter) ||
-                  c.shortname.toLowerCase().contains(lowerFilter))
+              .where(
+                (c) =>
+                    lowerFilter.isEmpty ||
+                    c.fullname.toLowerCase().contains(lowerFilter) ||
+                    c.shortname.toLowerCase().contains(lowerFilter),
+              )
               .toList();
           return AlertDialog(
             title: const Text('Selecionar Disciplina'),
@@ -274,15 +314,21 @@ class _TableEditorPageState extends State<TableEditorPage> {
                         return ListTile(
                           dense: true,
                           selected: isSelected,
-                          leading: Icon(Icons.school,
-                              size: 20,
-                              color: isSelected
-                                  ? AppTheme.accentGreen
-                                  : AppTheme.textSecondary),
-                          title: Text(c.fullname,
-                              style: const TextStyle(fontSize: 13)),
-                          subtitle: Text(c.shortname,
-                              style: const TextStyle(fontSize: 11)),
+                          leading: Icon(
+                            Icons.school,
+                            size: 20,
+                            color: isSelected
+                                ? AppTheme.accentGreen
+                                : AppTheme.textSecondary,
+                          ),
+                          title: Text(
+                            c.fullname,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                          subtitle: Text(
+                            c.shortname,
+                            style: const TextStyle(fontSize: 11),
+                          ),
                           onTap: () => Navigator.pop(ctx, c),
                         );
                       },
@@ -309,7 +355,10 @@ class _TableEditorPageState extends State<TableEditorPage> {
   }
 
   Widget _buildDateHeader(
-      BuildContext context, CourseConfig config, ConfigController ctrl) {
+    BuildContext context,
+    CourseConfig config,
+    ConfigController ctrl,
+  ) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
       child: GlassCard(
@@ -342,6 +391,20 @@ class _TableEditorPageState extends State<TableEditorPage> {
               ],
             ),
             const Spacer(),
+            IconButton(
+              tooltip: _allExpanded ? 'Recolher todas' : 'Expandir todas',
+              icon: Icon(
+                _allExpanded ? Icons.unfold_less : Icons.unfold_more,
+                color: AppTheme.accent,
+              ),
+              onPressed: () {
+                setState(() {
+                  _allExpanded = !_allExpanded;
+                  _expandToggleKey++;
+                });
+              },
+            ),
+            const SizedBox(width: 4),
             GradientButton(
               label: 'Alterar',
               icon: Icons.edit_calendar,
@@ -358,8 +421,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
                         datePickerTheme: DatePickerThemeData(
                           backgroundColor: AppTheme.bgSurface,
                           headerBackgroundColor: AppTheme.primary,
-                          dayForegroundColor:
-                              WidgetStateProperty.all(AppTheme.textPrimary),
+                          dayForegroundColor: WidgetStateProperty.all(
+                            AppTheme.textPrimary,
+                          ),
                         ),
                       ),
                       child: child!,
@@ -378,7 +442,10 @@ class _TableEditorPageState extends State<TableEditorPage> {
   }
 
   Widget _buildSectionsList(
-      BuildContext context, CourseConfig config, ConfigController ctrl) {
+    BuildContext context,
+    CourseConfig config,
+    ConfigController ctrl,
+  ) {
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 80),
@@ -386,190 +453,472 @@ class _TableEditorPageState extends State<TableEditorPage> {
       itemBuilder: (context, index) {
         final section = config.sections[index];
         return _buildSectionTile(
-            context, section, ctrl, config.semesterStartDate);
+          context,
+          section,
+          ctrl,
+          config.semesterStartDate,
+        );
       },
     );
   }
 
-  Widget _buildSectionTile(BuildContext context, SectionEntry section,
-      ConfigController ctrl, DateTime semesterStart) {
+  Widget _buildSectionTile(
+    BuildContext context,
+    SectionEntry section,
+    ConfigController ctrl,
+    DateTime semesterStart,
+  ) {
     final isLinked = section.moodleSectionId != null;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: isLinked
-              ? Border.all(
-                  color: AppTheme.accentGreen.withAlpha(120), width: 1.5)
-              : null,
-        ),
-        child: GlassCard(
-          useGradient: true,
-          child: Theme(
-            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(top: 8),
-              leading: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: section.visible
-                      ? AppTheme.primary.withAlpha(30)
-                      : AppTheme.danger.withAlpha(30),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Center(
-                  child: Text(
-                    '${section.orderIndex}',
-                    style: TextStyle(
-                      color:
-                          section.visible ? AppTheme.primary : AppTheme.danger,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-              title: Text(
-                MacroResolver.resolve(
-                    section.name,
-                    semesterStart,
-                    semesterStart
-                        .add(Duration(days: section.referenceDaysOffset))),
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: section.visible
-                      ? AppTheme.textPrimary
-                      : AppTheme.textSecondary,
-                  decoration:
-                      section.visible ? null : TextDecoration.lineThrough,
-                ),
-              ),
-              subtitle: Row(
-                children: [
-                  if (isLinked) ...[
-                    Icon(Icons.link, size: 12, color: AppTheme.accentGreen),
-                    const SizedBox(width: 4),
-                  ],
-                  Icon(Icons.calendar_today,
-                      size: 12, color: AppTheme.textSecondary),
-                  const SizedBox(width: 4),
-                  Text(
-                    _df.format(semesterStart
-                        .add(Duration(days: section.referenceDaysOffset))),
-                    style: const TextStyle(
-                        fontSize: 12, color: AppTheme.textSecondary),
-                  ),
-                  if (section.referenceDaysOffset != 0) ...[
-                    const SizedBox(width: 8),
-                    StatusChip(
-                      label: '+${section.referenceDaysOffset}d',
-                      color: AppTheme.accent,
-                    ),
-                  ],
-                ],
-              ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: Icon(
-                      section.visible ? Icons.visibility : Icons.visibility_off,
+    final isHovering = _hoveringSectionId == section.id;
+    return DragTarget<Map<String, String>>(
+      onWillAcceptWithDetails: (details) {
+        if (_hoveringSectionId != section.id) {
+          setState(() => _hoveringSectionId = section.id);
+        }
+        return true;
+      },
+      onLeave: (_) {
+        if (_hoveringSectionId == section.id) {
+          setState(() => _hoveringSectionId = null);
+        }
+      },
+      onAcceptWithDetails: (details) {
+        setState(() {
+          _hoveringSectionId = null;
+          _isDraggingSelection = false;
+          _hoveringActivityId = null;
+        });
+        final data = details.data;
+        final fromSectionId = data['fromSectionId']!;
+        final activityId = data['activityId']!;
+        if (ctrl.hasSelection) {
+          // Append to end of section (row-level targets handle positional drops)
+          ctrl.moveSelectedActivities(section.id);
+        } else {
+          ctrl.moveActivity(fromSectionId, section.id, activityId);
+        }
+      },
+      builder: (context, candidateData, rejectedData) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: isHovering
+                  ? Border.all(color: AppTheme.accent, width: 2.5)
+                  : isLinked
+                  ? Border.all(
+                      color: AppTheme.accentGreen.withAlpha(120),
+                      width: 1.5,
+                    )
+                  : null,
+              boxShadow: isHovering
+                  ? [
+                      BoxShadow(
+                        color: AppTheme.accent.withAlpha(60),
+                        blurRadius: 12,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: GlassCard(
+              useGradient: true,
+              child: Theme(
+                data: Theme.of(
+                  context,
+                ).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  key: ValueKey('section_${section.id}_$_expandToggleKey'),
+                  initiallyExpanded: _allExpanded,
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: EdgeInsets.zero,
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
                       color: section.visible
-                          ? AppTheme.accentGreen
+                          ? AppTheme.primary.withAlpha(30)
+                          : AppTheme.danger.withAlpha(30),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Center(
+                      child: Text(
+                        '${section.orderIndex}',
+                        style: TextStyle(
+                          color: section.visible
+                              ? AppTheme.primary
+                              : AppTheme.danger,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  title: InlineEditText(
+                    text: MacroResolver.resolve(
+                      section.name,
+                      semesterStart,
+                      semesterStart.add(
+                        Duration(days: section.referenceDaysOffset),
+                      ),
+                    ),
+                    editText: section.name,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: section.visible
+                          ? AppTheme.textPrimary
                           : AppTheme.textSecondary,
-                      size: 20,
+                      decoration: section.visible
+                          ? null
+                          : TextDecoration.lineThrough,
                     ),
-                    onPressed: () => ctrl.updateSection(
-                      section.id,
-                      visible: !section.visible,
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined,
-                        color: AppTheme.accentGreen, size: 20),
-                    onPressed: () =>
-                        _showEditSectionDialog(context, section, ctrl),
-                  ),
-                  PopupMenuButton<String>(
-                    icon: const Icon(Icons.more_vert,
-                        color: AppTheme.textSecondary, size: 20),
-                    color: AppTheme.bgSurface,
-                    onSelected: (v) {
-                      if (v == 'edit') {
-                        _showEditSectionDialog(context, section, ctrl);
-                      } else if (v == 'delete') {
-                        ctrl.removeSection(section.id);
-                      } else if (v == 'add_activity') {
-                        _showAddActivityDialog(
-                            context,
-                            section.id,
-                            ctrl,
-                            semesterStart.add(
-                                Duration(days: section.referenceDaysOffset)));
-                      }
+                    onChanged: (newName) {
+                      // Converter datas de volta para macros antes de salvar
+                      final sectionRefDate = semesterStart.add(
+                        Duration(days: section.referenceDaysOffset),
+                      );
+                      final macroName = MacroResolver.replaceDatesWithMacros(
+                        newName,
+                        sectionRefDate,
+                      );
+                      ctrl.updateSection(section.id, name: macroName);
                     },
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(value: 'edit', child: Text('Editar')),
-                      const PopupMenuItem(
-                          value: 'add_activity',
-                          child: Text('Adicionar Atividade')),
-                      const PopupMenuItem(
-                          value: 'delete',
-                          child: Text('Excluir',
-                              style: TextStyle(color: AppTheme.danger))),
+                  ),
+                  subtitle: Row(
+                    children: [
+                      if (isLinked) ...[
+                        Icon(Icons.link, size: 12, color: AppTheme.accentGreen),
+                        const SizedBox(width: 4),
+                      ],
+                      Icon(
+                        Icons.calendar_today,
+                        size: 12,
+                        color: AppTheme.textSecondary,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _df.format(
+                          semesterStart.add(
+                            Duration(days: section.referenceDaysOffset),
+                          ),
+                        ),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                      if (section.referenceDaysOffset != 0) ...[
+                        const SizedBox(width: 8),
+                        StatusChip(
+                          label: '+${section.referenceDaysOffset}d',
+                          color: AppTheme.accent,
+                        ),
+                      ],
                     ],
                   ),
-                ],
-              ),
-              children: [
-                ReorderableListView(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  buildDefaultDragHandles: false,
-                  onReorder: (oldIdx, newIdx) =>
-                      ctrl.reorderActivities(section.id, oldIdx, newIdx),
-                  children: [
-                    for (int i = 0; i < section.activities.length; i++)
-                      _buildActivityRow(
-                        context,
-                        section.id,
-                        section.activities[i],
-                        ctrl,
-                        semesterStart
-                            .add(Duration(days: section.referenceDaysOffset)),
-                        index: i,
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          section.visible
+                              ? Icons.visibility
+                              : Icons.visibility_off,
+                          color: section.visible
+                              ? AppTheme.accentGreen
+                              : AppTheme.textSecondary,
+                          size: 20,
+                        ),
+                        onPressed: () => ctrl.updateSection(
+                          section.id,
+                          visible: !section.visible,
+                        ),
                       ),
+                      IconButton(
+                        icon: const Icon(
+                          Icons.edit_outlined,
+                          color: AppTheme.accentGreen,
+                          size: 20,
+                        ),
+                        onPressed: () =>
+                            _showEditSectionDialog(context, section, ctrl),
+                      ),
+                      PopupMenuButton<String>(
+                        icon: const Icon(
+                          Icons.more_vert,
+                          color: AppTheme.textSecondary,
+                          size: 20,
+                        ),
+                        color: AppTheme.bgSurface,
+                        onSelected: (v) {
+                          if (v == 'edit') {
+                            _showEditSectionDialog(context, section, ctrl);
+                          } else if (v == 'delete') {
+                            ctrl.removeSection(section.id);
+                          } else if (v == 'add_activity') {
+                            _showAddActivityDialog(
+                              context,
+                              section.id,
+                              ctrl,
+                              semesterStart.add(
+                                Duration(days: section.referenceDaysOffset),
+                              ),
+                            );
+                          }
+                        },
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(
+                            value: 'edit',
+                            child: Text('Editar'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'add_activity',
+                            child: Text('Adicionar Atividade'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Text(
+                              'Excluir',
+                              style: TextStyle(color: AppTheme.danger),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: AppTheme.bgDark.withAlpha(120),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      margin: const EdgeInsets.only(top: 4),
+                      padding: const EdgeInsets.only(top: 8, bottom: 4),
+                      child: ctrl.hasSelection
+                          ? Column(
+                              children: [
+                                for (
+                                  int i = 0;
+                                  i < section.activities.length;
+                                  i++
+                                ) ...[
+                                  _buildActivityRowWithDropTarget(
+                                    context,
+                                    section.id,
+                                    section.activities[i],
+                                    ctrl,
+                                    semesterStart.add(
+                                      Duration(
+                                        days: section.referenceDaysOffset,
+                                      ),
+                                    ),
+                                    index: i,
+                                  ),
+                                ],
+                                // Drop zone at the bottom of the section
+                                DragTarget<Map<String, String>>(
+                                  onWillAcceptWithDetails: (_) => true,
+                                  onAcceptWithDetails: (details) {
+                                    setState(() {
+                                      _isDraggingSelection = false;
+                                      _hoveringActivityId = null;
+                                    });
+                                    ctrl.moveSelectedActivitiesAtIndex(
+                                      section.id,
+                                      section.activities.length,
+                                    );
+                                  },
+                                  builder: (context, candidateData, _) {
+                                    return Container(
+                                      height: candidateData.isNotEmpty ? 32 : 8,
+                                      decoration: candidateData.isNotEmpty
+                                          ? BoxDecoration(
+                                              border: Border(
+                                                top: BorderSide(
+                                                  color: AppTheme.accent,
+                                                  width: 2,
+                                                ),
+                                              ),
+                                            )
+                                          : null,
+                                    );
+                                  },
+                                ),
+                              ],
+                            )
+                          : ReorderableListView(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              buildDefaultDragHandles: false,
+                              onReorder: (oldIdx, newIdx) =>
+                                  ctrl.reorderActivities(
+                                    section.id,
+                                    oldIdx,
+                                    newIdx,
+                                  ),
+                              children: [
+                                for (
+                                  int i = 0;
+                                  i < section.activities.length;
+                                  i++
+                                )
+                                  _buildActivityRow(
+                                    context,
+                                    section.id,
+                                    section.activities[i],
+                                    ctrl,
+                                    semesterStart.add(
+                                      Duration(
+                                        days: section.referenceDaysOffset,
+                                      ),
+                                    ),
+                                    index: i,
+                                  ),
+                              ],
+                            ),
+                    ),
                   ],
                 ),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildActivityRow(BuildContext context, String sectionId,
-      ActivityEntry activity, ConfigController ctrl, DateTime sectionRefDate,
-      {required int index}) {
-    return Padding(
-      key: ValueKey(activity.id),
-      padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+  /// Wraps _buildActivityRow with a DragTarget for positional drop (selection mode).
+  Widget _buildActivityRowWithDropTarget(
+    BuildContext context,
+    String sectionId,
+    ActivityEntry activity,
+    ConfigController ctrl,
+    DateTime sectionRefDate, {
+    required int index,
+  }) {
+    final isSelected = ctrl.selectedActivityIds.contains(activity.id);
+
+    // Selected items don't need a drop target (they are the dragged items)
+    if (isSelected) {
+      return _buildActivityRow(
+        context,
+        sectionId,
+        activity,
+        ctrl,
+        sectionRefDate,
+        index: index,
+      );
+    }
+
+    final isHoveringHere = _hoveringActivityId == activity.id;
+
+    return DragTarget<Map<String, String>>(
+      onWillAcceptWithDetails: (details) {
+        if (_hoveringActivityId != activity.id) {
+          setState(() => _hoveringActivityId = activity.id);
+        }
+        return true;
+      },
+      onLeave: (_) {
+        if (_hoveringActivityId == activity.id) {
+          setState(() => _hoveringActivityId = null);
+        }
+      },
+      onAcceptWithDetails: (details) {
+        setState(() {
+          _isDraggingSelection = false;
+          _hoveringActivityId = null;
+        });
+        ctrl.moveSelectedActivitiesAtIndex(sectionId, index);
+      },
+      builder: (context, candidateData, _) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isHoveringHere)
+              Container(
+                height: 3,
+                margin: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: AppTheme.accent,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            _buildActivityRow(
+              context,
+              sectionId,
+              activity,
+              ctrl,
+              sectionRefDate,
+              index: index,
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildActivityRow(
+    BuildContext context,
+    String sectionId,
+    ActivityEntry activity,
+    ConfigController ctrl,
+    DateTime sectionRefDate, {
+    required int index,
+  }) {
+    final isSelected = ctrl.selectedActivityIds.contains(activity.id);
+    final hasSelection = ctrl.hasSelection;
+
+    // During multi-drag, hide all selected items (they appear in the feedback)
+    if (_isDraggingSelection && isSelected) {
+      return SizedBox(key: ValueKey(activity.id));
+    }
+
+    Widget rowContent = Container(
+      decoration: isSelected
+          ? BoxDecoration(
+              color: AppTheme.accent.withAlpha(30),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.accent.withAlpha(100)),
+            )
+          : null,
+      padding: isSelected
+          ? const EdgeInsets.symmetric(horizontal: 4, vertical: 2)
+          : null,
       child: Row(
         children: [
-          ReorderableDragStartListener(
-            index: index,
-            child: const Icon(Icons.drag_handle,
-                size: 18, color: AppTheme.textSecondary),
-          ),
+          if (!hasSelection)
+            ReorderableDragStartListener(
+              index: index,
+              child: const Icon(
+                Icons.drag_handle,
+                size: 18,
+                color: AppTheme.textSecondary,
+              ),
+            )
+          else
+            Icon(
+              isSelected ? Icons.drag_indicator : Icons.drag_handle,
+              size: 18,
+              color: isSelected ? AppTheme.accent : AppTheme.textSecondary,
+            ),
+          if (hasSelection)
+            Padding(
+              padding: const EdgeInsets.only(right: 2),
+              child: Icon(
+                isSelected ? Icons.check_box : Icons.check_box_outline_blank,
+                size: 16,
+                color: isSelected ? AppTheme.accent : AppTheme.textSecondary,
+              ),
+            ),
           const SizedBox(width: 4),
           if (activity.moodleModuleId != null)
             Tooltip(
               message: 'Moodle ID: ${activity.moodleModuleId}',
-              child:
-                  const Icon(Icons.link, size: 14, color: AppTheme.accentGreen),
+              child: const Icon(
+                Icons.link,
+                size: 14,
+                color: AppTheme.accentGreen,
+              ),
             )
           else
             const Icon(Icons.link_off, size: 14, color: AppTheme.textSecondary),
@@ -580,39 +929,62 @@ class _TableEditorPageState extends State<TableEditorPage> {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              MacroResolver.resolve(
-                  activity.name,
-                  sectionRefDate,
-                  null,
-                  activity.computeOpenDate(sectionRefDate),
-                  activity.computeCloseDate(sectionRefDate)),
+            child: InlineEditText(
+              text: MacroResolver.resolve(
+                activity.name,
+                sectionRefDate,
+                null,
+                activity.computeOpenDate(sectionRefDate),
+                activity.computeCloseDate(sectionRefDate),
+              ),
+              editText: activity.name,
               style: TextStyle(
                 color: activity.visible
                     ? AppTheme.textPrimary
                     : AppTheme.textSecondary,
                 fontSize: 13,
-                decoration:
-                    activity.visible ? null : TextDecoration.lineThrough,
+                decoration: activity.visible
+                    ? null
+                    : TextDecoration.lineThrough,
               ),
+              onChanged: (newName) {
+                final openDate = activity.computeOpenDate(sectionRefDate);
+                final closeDate = activity.computeCloseDate(sectionRefDate);
+                final macroName = MacroResolver.replaceDatesWithMacros(
+                  newName,
+                  sectionRefDate,
+                  activityOpenDate: openDate,
+                  activityCloseDate: closeDate,
+                );
+                ctrl.updateActivity(sectionId, activity.id, name: macroName);
+              },
             ),
           ),
           if (activity.openOffsetDays != null) ...[
             Text(
-              _formatActivityDate(activity.computeOpenDate(sectionRefDate),
-                  _needsTime(activity.activityType)),
-              style:
-                  const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+              _formatActivityDate(
+                activity.computeOpenDate(sectionRefDate),
+                _needsTime(activity.activityType),
+              ),
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppTheme.textSecondary,
+              ),
             ),
             if (activity.closeOffsetDays != null) ...[
-              const Text(' → ',
-                  style:
-                      TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+              const Text(
+                ' → ',
+                style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+              ),
               Text(
-                _formatActivityDate(activity.computeCloseDate(sectionRefDate),
-                    _needsTime(activity.activityType)),
+                _formatActivityDate(
+                  activity.computeCloseDate(sectionRefDate),
+                  _needsTime(activity.activityType),
+                ),
                 style: const TextStyle(
-                    fontSize: 11, color: AppTheme.textSecondary),
+                  fontSize: 11,
+                  color: AppTheme.textSecondary,
+                ),
               ),
             ],
           ],
@@ -631,49 +1003,93 @@ class _TableEditorPageState extends State<TableEditorPage> {
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.edit_outlined,
-                size: 16, color: AppTheme.accent),
+            icon: const Icon(
+              Icons.edit_outlined,
+              size: 16,
+              color: AppTheme.accent,
+            ),
             onPressed: () => _showEditActivityDialog(
-                context, sectionId, activity, ctrl, sectionRefDate),
+              context,
+              sectionId,
+              activity,
+              ctrl,
+              sectionRefDate,
+            ),
           ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert,
-                size: 16, color: AppTheme.textSecondary),
-            color: AppTheme.bgSurface,
-            onSelected: (v) {
-              if (v == 'delete') {
-                ctrl.removeActivity(sectionId, activity.id);
-              } else if (v.startsWith('move:')) {
-                final targetSectionId = v.substring(5);
-                ctrl.moveActivity(sectionId, targetSectionId, activity.id);
-              }
-            },
-            itemBuilder: (_) {
-              final sections = ctrl.current?.sections ?? [];
-              return [
-                if (sections.length > 1)
-                  PopupMenuItem(
-                    enabled: false,
-                    child: Text('Mover para...',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: AppTheme.textSecondary,
-                            fontWeight: FontWeight.bold)),
-                  ),
-                ...sections.where((s) => s.id != sectionId).map((s) =>
-                    PopupMenuItem(
-                      value: 'move:${s.id}',
-                      child: Text(s.name, style: const TextStyle(fontSize: 13)),
-                    )),
-                if (sections.length > 1) const PopupMenuDivider(),
-                const PopupMenuItem(
-                  value: 'delete',
-                  child:
-                      Text('Excluir', style: TextStyle(color: AppTheme.danger)),
+          IconButton(
+            icon: const Icon(
+              Icons.delete_outline,
+              size: 16,
+              color: AppTheme.danger,
+            ),
+            onPressed: () => ctrl.removeActivity(sectionId, activity.id),
+          ),
+        ],
+      ),
+    );
+
+    Widget tappableRow = GestureDetector(
+      onTap: () {
+        final ctrlPressed = HardwareKeyboard.instance.logicalKeysPressed.any(
+          (k) =>
+              k == LogicalKeyboardKey.controlLeft ||
+              k == LogicalKeyboardKey.controlRight,
+        );
+        if (ctrlPressed || hasSelection) {
+          ctrl.toggleActivitySelection(activity.id);
+        }
+      },
+      child: rowContent,
+    );
+
+    Widget finalChild;
+
+    if (hasSelection && isSelected) {
+      // Selected items are Draggable for cross-section moves
+      finalChild = Draggable<Map<String, String>>(
+        data: {'fromSectionId': sectionId, 'activityId': activity.id},
+        onDragStarted: () => setState(() => _isDraggingSelection = true),
+        onDragEnd: (_) => setState(() => _isDraggingSelection = false),
+        onDraggableCanceled: (_, __) =>
+            setState(() => _isDraggingSelection = false),
+        feedback: Material(
+          color: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppTheme.accent,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.drag_indicator, color: Colors.white, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  '${ctrl.selectedActivityIds.length} atividade(s)',
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
                 ),
-              ];
-            },
+              ],
+            ),
           ),
+        ),
+        childWhenDragging: const SizedBox.shrink(),
+        child: tappableRow,
+      );
+    } else {
+      finalChild = tappableRow;
+    }
+
+    return Padding(
+      key: ValueKey(activity.id),
+      padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (index > 0)
+            Divider(height: 1, thickness: 0.5, color: AppTheme.divider),
+          if (index > 0) const SizedBox(height: 6),
+          finalChild,
         ],
       ),
     );
@@ -737,7 +1153,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
     DropdownMenuItem(value: 'Lição', child: Text('Lição')),
     DropdownMenuItem(value: 'H5P', child: Text('H5P')),
     DropdownMenuItem(
-        value: 'Conteúdo interativo', child: Text('Conteúdo interativo')),
+      value: 'Conteúdo interativo',
+      child: Text('Conteúdo interativo'),
+    ),
     DropdownMenuItem(value: 'Base de dados', child: Text('Base de dados')),
     DropdownMenuItem(value: 'Diário', child: Text('Diário')),
     DropdownMenuItem(value: 'Presença', child: Text('Presença')),
@@ -746,21 +1164,32 @@ class _TableEditorPageState extends State<TableEditorPage> {
     DropdownMenuItem(value: 'Livro', child: Text('Livro')),
     DropdownMenuItem(value: 'Pacote SCORM', child: Text('Pacote SCORM')),
     DropdownMenuItem(
-        value: 'Conteúdo do pacote IMS', child: Text('Conteúdo do pacote IMS')),
+      value: 'Conteúdo do pacote IMS',
+      child: Text('Conteúdo do pacote IMS'),
+    ),
     DropdownMenuItem(
-        value: 'Certificado Simples', child: Text('Certificado Simples')),
+      value: 'Certificado Simples',
+      child: Text('Certificado Simples'),
+    ),
     DropdownMenuItem(value: 'Checklist', child: Text('Checklist')),
     DropdownMenuItem(value: 'GeoGebra', child: Text('GeoGebra')),
     DropdownMenuItem(
-        value: 'Laboratório de Avaliação',
-        child: Text('Laboratório de Avaliação')),
+      value: 'Laboratório de Avaliação',
+      child: Text('Laboratório de Avaliação'),
+    ),
     DropdownMenuItem(
-        value: 'Laboratório Virtual', child: Text('Laboratório Virtual')),
+      value: 'Laboratório Virtual',
+      child: Text('Laboratório Virtual'),
+    ),
     DropdownMenuItem(value: 'Quizventure', child: Text('Quizventure')),
     DropdownMenuItem(
-        value: 'Atividade Hot Potatoes', child: Text('Atividade Hot Potatoes')),
+      value: 'Atividade Hot Potatoes',
+      child: Text('Atividade Hot Potatoes'),
+    ),
     DropdownMenuItem(
-        value: 'Área de texto e mídia', child: Text('Área de texto e mídia')),
+      value: 'Área de texto e mídia',
+      child: Text('Área de texto e mídia'),
+    ),
     DropdownMenuItem(value: 'Outro', child: Text('Outro')),
   ];
 
@@ -789,8 +1218,10 @@ class _TableEditorPageState extends State<TableEditorPage> {
                 const SizedBox(height: 16),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading:
-                      const Icon(Icons.calendar_today, color: AppTheme.accent),
+                  leading: const Icon(
+                    Icons.calendar_today,
+                    color: AppTheme.accent,
+                  ),
                   title: Text(_df.format(selectedDate)),
                   subtitle: const Text('Data da seção'),
                   onTap: () async {
@@ -829,10 +1260,14 @@ class _TableEditorPageState extends State<TableEditorPage> {
   }
 
   void _showEditSectionDialog(
-      BuildContext context, SectionEntry section, ConfigController ctrl) {
+    BuildContext context,
+    SectionEntry section,
+    ConfigController ctrl,
+  ) {
     final nameCtrl = TextEditingController(text: section.name);
-    final daysCtrl =
-        TextEditingController(text: section.referenceDaysOffset.toString());
+    final daysCtrl = TextEditingController(
+      text: section.referenceDaysOffset.toString(),
+    );
 
     final sync = context.read<SyncController>();
     final hasMoodleData = sync.moodleSections.isNotEmpty;
@@ -876,7 +1311,10 @@ class _TableEditorPageState extends State<TableEditorPage> {
                   InkWell(
                     onTap: () async {
                       final result = await _showMoodleSectionPicker(
-                          ctx, sync.moodleSections, selectedMoodleSectionId);
+                        ctx,
+                        sync.moodleSections,
+                        selectedMoodleSectionId,
+                      );
                       if (result != null) {
                         setState(() {
                           selectedMoodleSectionId = result.id;
@@ -889,8 +1327,11 @@ class _TableEditorPageState extends State<TableEditorPage> {
                         labelText: 'Seção Moodle',
                         suffixIcon: selectedMoodleSectionId != null
                             ? IconButton(
-                                icon: const Icon(Icons.close,
-                                    size: 18, color: AppTheme.danger),
+                                icon: const Icon(
+                                  Icons.close,
+                                  size: 18,
+                                  color: AppTheme.danger,
+                                ),
                                 onPressed: () => setState(() {
                                   selectedMoodleSectionId = null;
                                   selectedMoodleSectionName = null;
@@ -914,7 +1355,7 @@ class _TableEditorPageState extends State<TableEditorPage> {
                             child: Text(
                               selectedMoodleSectionId != null
                                   ? (selectedMoodleSectionName ??
-                                      'ID: $selectedMoodleSectionId')
+                                        'ID: $selectedMoodleSectionId')
                                   : 'Selecionar seção...',
                               style: TextStyle(
                                 fontSize: 14,
@@ -962,10 +1403,12 @@ class _TableEditorPageState extends State<TableEditorPage> {
     return withTime ? _dfh.format(date) : _df.format(date);
   }
 
-  Widget _buildTimeSelector(BuildContext context,
-      {required String label,
-      required int? minutes,
-      required ValueChanged<int?> onChanged}) {
+  Widget _buildTimeSelector(
+    BuildContext context, {
+    required String label,
+    required int? minutes,
+    required ValueChanged<int?> onChanged,
+  }) {
     final h = minutes != null ? minutes ~/ 60 : null;
     final m = minutes != null ? minutes % 60 : null;
     final display = minutes != null
@@ -975,10 +1418,14 @@ class _TableEditorPageState extends State<TableEditorPage> {
       dense: true,
       contentPadding: const EdgeInsets.only(left: 28),
       leading: const Icon(Icons.access_time, size: 18, color: AppTheme.accent),
-      title: Text(display,
-          style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary)),
-      subtitle: Text(label,
-          style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      title: Text(
+        display,
+        style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+      ),
+      subtitle: Text(
+        label,
+        style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+      ),
       trailing: minutes != null
           ? IconButton(
               icon: const Icon(Icons.close, size: 16, color: AppTheme.danger),
@@ -999,8 +1446,12 @@ class _TableEditorPageState extends State<TableEditorPage> {
     );
   }
 
-  void _showAddActivityDialog(BuildContext context, String sectionId,
-      ConfigController ctrl, DateTime sectionRefDate) {
+  void _showAddActivityDialog(
+    BuildContext context,
+    String sectionId,
+    ConfigController ctrl,
+    DateTime sectionRefDate,
+  ) {
     final nameCtrl = TextEditingController();
     final openOffsetCtrl = TextEditingController();
     final closeOffsetCtrl = TextEditingController();
@@ -1036,8 +1487,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
                   children: [
                     TextField(
                       controller: nameCtrl,
-                      decoration:
-                          const InputDecoration(labelText: 'Nome da atividade'),
+                      decoration: const InputDecoration(
+                        labelText: 'Nome da atividade',
+                      ),
                       autofocus: true,
                     ),
                     const SizedBox(height: 12),
@@ -1070,8 +1522,11 @@ class _TableEditorPageState extends State<TableEditorPage> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        const Icon(Icons.event,
-                            color: AppTheme.accentGreen, size: 20),
+                        const Icon(
+                          Icons.event,
+                          color: AppTheme.accentGreen,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: TextField(
@@ -1083,7 +1538,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
                                   ? _df.format(openPreview)
                                   : 'Ref: ${_df.format(sectionRefDate)}',
                               helperStyle: const TextStyle(
-                                  color: AppTheme.accent, fontSize: 11),
+                                color: AppTheme.accent,
+                                fontSize: 11,
+                              ),
                             ),
                             onChanged: (_) => setState(() {}),
                           ),
@@ -1102,8 +1559,11 @@ class _TableEditorPageState extends State<TableEditorPage> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        const Icon(Icons.event_busy,
-                            color: AppTheme.danger, size: 20),
+                        const Icon(
+                          Icons.event_busy,
+                          color: AppTheme.danger,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: TextField(
@@ -1115,7 +1575,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
                                   ? _df.format(closePreview)
                                   : null,
                               helperStyle: const TextStyle(
-                                  color: AppTheme.accent, fontSize: 11),
+                                color: AppTheme.accent,
+                                fontSize: 11,
+                              ),
                             ),
                             onChanged: (_) => setState(() {}),
                           ),
@@ -1165,13 +1627,20 @@ class _TableEditorPageState extends State<TableEditorPage> {
     );
   }
 
-  void _showEditActivityDialog(BuildContext context, String sectionId,
-      ActivityEntry activity, ConfigController ctrl, DateTime sectionRefDate) {
+  void _showEditActivityDialog(
+    BuildContext context,
+    String sectionId,
+    ActivityEntry activity,
+    ConfigController ctrl,
+    DateTime sectionRefDate,
+  ) {
     final nameCtrl = TextEditingController(text: activity.name);
-    final openOffsetCtrl =
-        TextEditingController(text: activity.openOffsetDays?.toString() ?? '');
-    final closeOffsetCtrl =
-        TextEditingController(text: activity.closeOffsetDays?.toString() ?? '');
+    final openOffsetCtrl = TextEditingController(
+      text: activity.openOffsetDays?.toString() ?? '',
+    );
+    final closeOffsetCtrl = TextEditingController(
+      text: activity.closeOffsetDays?.toString() ?? '',
+    );
     String type = activity.activityType;
     int? openTimeMinutes = activity.openTimeMinutes;
     int? closeTimeMinutes = activity.closeTimeMinutes;
@@ -1217,8 +1686,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
                   children: [
                     TextField(
                       controller: nameCtrl,
-                      decoration:
-                          const InputDecoration(labelText: 'Nome da atividade'),
+                      decoration: const InputDecoration(
+                        labelText: 'Nome da atividade',
+                      ),
                     ),
                     const SizedBox(height: 12),
                     if (hasMoodleData)
@@ -1250,8 +1720,11 @@ class _TableEditorPageState extends State<TableEditorPage> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        const Icon(Icons.event,
-                            color: AppTheme.accentGreen, size: 20),
+                        const Icon(
+                          Icons.event,
+                          color: AppTheme.accentGreen,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: TextField(
@@ -1263,7 +1736,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
                                   ? _df.format(openPreview)
                                   : 'Ref: ${_df.format(sectionRefDate)}',
                               helperStyle: const TextStyle(
-                                  color: AppTheme.accent, fontSize: 11),
+                                color: AppTheme.accent,
+                                fontSize: 11,
+                              ),
                             ),
                             onChanged: (_) => setState(() {}),
                           ),
@@ -1282,8 +1757,11 @@ class _TableEditorPageState extends State<TableEditorPage> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        const Icon(Icons.event_busy,
-                            color: AppTheme.danger, size: 20),
+                        const Icon(
+                          Icons.event_busy,
+                          color: AppTheme.danger,
+                          size: 20,
+                        ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: TextField(
@@ -1295,7 +1773,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
                                   ? _df.format(closePreview)
                                   : null,
                               helperStyle: const TextStyle(
-                                  color: AppTheme.accent, fontSize: 11),
+                                color: AppTheme.accent,
+                                fontSize: 11,
+                              ),
                             ),
                             onChanged: (_) => setState(() {}),
                           ),
@@ -1365,8 +1845,11 @@ class _TableEditorPageState extends State<TableEditorPage> {
           labelText: 'Atividade Moodle',
           suffixIcon: selectedId != null
               ? IconButton(
-                  icon:
-                      const Icon(Icons.close, size: 18, color: AppTheme.danger),
+                  icon: const Icon(
+                    Icons.close,
+                    size: 18,
+                    color: AppTheme.danger,
+                  ),
                   onPressed: onClear,
                 )
               : const Icon(Icons.arrow_drop_down),
@@ -1403,7 +1886,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
                     Text(
                       '$currentType • ID: $selectedId',
                       style: const TextStyle(
-                          fontSize: 11, color: AppTheme.textSecondary),
+                        fontSize: 11,
+                        color: AppTheme.textSecondary,
+                      ),
                     ),
                 ],
               ),
@@ -1422,7 +1907,8 @@ class _TableEditorPageState extends State<TableEditorPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-              'Nenhuma atividade do Moodle carregada. Faça login e acesse a página de sincronização primeiro.'),
+            'Nenhuma atividade do Moodle carregada. Faça login e acesse a página de sincronização primeiro.',
+          ),
         ),
       );
       return null;
@@ -1454,41 +1940,48 @@ class _TableEditorPageState extends State<TableEditorPage> {
                       child: ListView(
                         children: [
                           for (final sec in sections)
-                            if (sec.modules.any((m) =>
-                                lowerFilter.isEmpty ||
-                                m.name.toLowerCase().contains(lowerFilter) ||
-                                m.modname.toLowerCase().contains(lowerFilter)))
+                            if (sec.modules.any(
+                              (m) =>
+                                  lowerFilter.isEmpty ||
+                                  m.name.toLowerCase().contains(lowerFilter) ||
+                                  m.modname.toLowerCase().contains(lowerFilter),
+                            ))
                               ExpansionTile(
-                                title: Text(sec.name,
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 13)),
+                                title: Text(
+                                  sec.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
+                                ),
                                 initiallyExpanded: lowerFilter.isNotEmpty,
                                 children: [
                                   for (final mod in sec.modules)
                                     if (lowerFilter.isEmpty ||
-                                        mod.name
-                                            .toLowerCase()
-                                            .contains(lowerFilter) ||
-                                        mod.modname
-                                            .toLowerCase()
-                                            .contains(lowerFilter))
+                                        mod.name.toLowerCase().contains(
+                                          lowerFilter,
+                                        ) ||
+                                        mod.modname.toLowerCase().contains(
+                                          lowerFilter,
+                                        ))
                                       ListTile(
                                         dense: true,
                                         leading: Icon(
                                           Icons.extension,
                                           size: 18,
                                           color: _activityColor(
-                                              _modnameToType[mod.modname] ??
-                                                  'Outro'),
+                                            _modnameToType[mod.modname] ??
+                                                'Outro',
+                                          ),
                                         ),
-                                        title: Text(mod.name,
-                                            style:
-                                                const TextStyle(fontSize: 13)),
+                                        title: Text(
+                                          mod.name,
+                                          style: const TextStyle(fontSize: 13),
+                                        ),
                                         subtitle: Text(
-                                            '${_modnameToType[mod.modname] ?? mod.modname} • ID: ${mod.id}',
-                                            style:
-                                                const TextStyle(fontSize: 11)),
+                                          '${_modnameToType[mod.modname] ?? mod.modname} • ID: ${mod.id}',
+                                          style: const TextStyle(fontSize: 11),
+                                        ),
                                         onTap: () => Navigator.pop(ctx, mod),
                                       ),
                                 ],
@@ -1512,8 +2005,11 @@ class _TableEditorPageState extends State<TableEditorPage> {
     );
   }
 
-  Future<MoodleSection?> _showMoodleSectionPicker(BuildContext context,
-      List<MoodleSection> sections, int? currentId) async {
+  Future<MoodleSection?> _showMoodleSectionPicker(
+    BuildContext context,
+    List<MoodleSection> sections,
+    int? currentId,
+  ) async {
     String filter = '';
     return showDialog<MoodleSection>(
       context: context,
@@ -1521,9 +2017,11 @@ class _TableEditorPageState extends State<TableEditorPage> {
         builder: (ctx, setState) {
           final lowerFilter = filter.toLowerCase();
           final filtered = sections
-              .where((s) =>
-                  lowerFilter.isEmpty ||
-                  s.name.toLowerCase().contains(lowerFilter))
+              .where(
+                (s) =>
+                    lowerFilter.isEmpty ||
+                    s.name.toLowerCase().contains(lowerFilter),
+              )
               .toList();
           return AlertDialog(
             title: const Text('Selecionar Seção do Moodle'),
@@ -1549,16 +2047,21 @@ class _TableEditorPageState extends State<TableEditorPage> {
                         return ListTile(
                           dense: true,
                           selected: isSelected,
-                          leading: Icon(Icons.folder_outlined,
-                              size: 20,
-                              color: isSelected
-                                  ? AppTheme.accentGreen
-                                  : AppTheme.textSecondary),
-                          title: Text(sec.name,
-                              style: const TextStyle(fontSize: 13)),
+                          leading: Icon(
+                            Icons.folder_outlined,
+                            size: 20,
+                            color: isSelected
+                                ? AppTheme.accentGreen
+                                : AppTheme.textSecondary,
+                          ),
+                          title: Text(
+                            sec.name,
+                            style: const TextStyle(fontSize: 13),
+                          ),
                           subtitle: Text(
-                              'Seção ${sec.section} • ${sec.modules.length} atividades',
-                              style: const TextStyle(fontSize: 11)),
+                            'Seção ${sec.section} • ${sec.modules.length} atividades',
+                            style: const TextStyle(fontSize: 11),
+                          ),
                           onTap: () => Navigator.pop(ctx, sec),
                         );
                       },
@@ -1580,7 +2083,10 @@ class _TableEditorPageState extends State<TableEditorPage> {
   }
 
   void _showRenameDialog(
-      BuildContext context, CourseConfig config, ConfigController ctrl) {
+    BuildContext context,
+    CourseConfig config,
+    ConfigController ctrl,
+  ) {
     final nameCtrl = TextEditingController(text: config.name);
     showDialog(
       context: context,

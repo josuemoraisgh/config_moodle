@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
+import 'package:config_moodle/core/utils/macro_resolver.dart';
 import 'package:config_moodle/core/utils/string_matcher.dart';
 import 'package:config_moodle/domain/entities/course_config.dart';
 import 'package:config_moodle/domain/entities/moodle_entities.dart';
@@ -42,7 +43,10 @@ class SyncController extends ChangeNotifier {
   }
 
   Future<void> loadMoodleSections(
-      String token, String baseUrl, int courseId) async {
+    String token,
+    String baseUrl,
+    int courseId,
+  ) async {
     _loading = true;
     _error = null;
     notifyListeners();
@@ -63,8 +67,10 @@ class SyncController extends ChangeNotifier {
     final moodleNames = _moodleSections.map((s) => s.name).toList();
 
     for (final section in config.sections) {
-      final (idx, score) =
-          StringMatcher.findBestMatch(section.name, moodleNames);
+      final (idx, score) = StringMatcher.findBestMatch(
+        section.name,
+        moodleNames,
+      );
 
       MoodleSection? matched;
       if (idx >= 0) {
@@ -76,37 +82,44 @@ class SyncController extends ChangeNotifier {
       if (matched != null) {
         final moduleNames = matched.modules.map((m) => m.name).toList();
         for (final activity in section.activities) {
-          final (aIdx, aScore) =
-              StringMatcher.findBestMatch(activity.name, moduleNames);
-          activityMatches.add(ActivityMatch(
-            local: activity,
-            moodleModule: aIdx >= 0 ? matched.modules[aIdx] : null,
-            score: aScore,
-          ));
+          final (aIdx, aScore) = StringMatcher.findBestMatch(
+            activity.name,
+            moduleNames,
+          );
+          activityMatches.add(
+            ActivityMatch(
+              local: activity,
+              moodleModule: aIdx >= 0 ? matched.modules[aIdx] : null,
+              score: aScore,
+            ),
+          );
         }
       } else {
         for (final activity in section.activities) {
-          activityMatches.add(ActivityMatch(
-            local: activity,
-            moodleModule: null,
-            score: 0,
-          ));
+          activityMatches.add(
+            ActivityMatch(local: activity, moodleModule: null, score: 0),
+          );
         }
       }
 
-      _matches.add(SectionMatch(
-        local: section,
-        moodleSection: matched,
-        score: score,
-        activityMatches: activityMatches,
-      ));
+      _matches.add(
+        SectionMatch(
+          local: section,
+          moodleSection: matched,
+          score: score,
+          activityMatches: activityMatches,
+        ),
+      );
     }
     notifyListeners();
   }
 
   /// Executa a sincronização para o Moodle.
   Future<void> syncToMoodle(
-      String token, String baseUrl, CourseConfig config) async {
+    String token,
+    String baseUrl,
+    CourseConfig config,
+  ) async {
     _syncing = true;
     _progress = 0;
     _progressMessage = 'Iniciando sincronização...';
@@ -128,15 +141,27 @@ class SyncController extends ChangeNotifier {
           continue;
         }
 
+        // Data de referência para resolver macros da seção
+        final sectionRefDate = config.semesterStartDate.add(
+          Duration(days: match.local.referenceDaysOffset),
+        );
+
+        // Resolver macros no nome da seção antes de enviar ao Moodle
+        final resolvedSectionName = MacroResolver.resolve(
+          match.local.name,
+          config.semesterStartDate,
+          sectionRefDate,
+        );
+
         // Atualizar nome da seção se diferente
-        if (match.local.name != match.moodleSection!.name) {
-          _progressMessage = 'Atualizando seção: ${match.local.name}';
+        if (resolvedSectionName != match.moodleSection!.name) {
+          _progressMessage = 'Atualizando seção: $resolvedSectionName';
           notifyListeners();
           await _repo.updateSectionName(
             token,
             baseUrl,
             match.moodleSection!.id,
-            match.local.name,
+            resolvedSectionName,
           );
         }
 
@@ -144,9 +169,18 @@ class SyncController extends ChangeNotifier {
         for (final am in match.activityMatches) {
           if (am.moodleModule == null) continue;
 
+          // Resolver macros no nome da atividade
+          final resolvedActivityName = MacroResolver.resolve(
+            am.local.name,
+            config.semesterStartDate,
+            sectionRefDate,
+            am.local.computeOpenDate(sectionRefDate),
+            am.local.computeCloseDate(sectionRefDate),
+          );
+
           // Atualizar visibilidade se diferente
           if (am.local.visible != am.moodleModule!.visible) {
-            _progressMessage = 'Visibilidade: ${am.local.name}';
+            _progressMessage = 'Visibilidade: $resolvedActivityName';
             notifyListeners();
             await _repo.updateModuleVisibility(
               token,
@@ -158,18 +192,19 @@ class SyncController extends ChangeNotifier {
 
           // Para labels: atualizar nome e conteúdo HTML
           if (am.local.activityType == 'Área de texto e mídia') {
-            final htmlContent = '<p dir="ltr" style="text-align: left;"></p>'
+            final htmlContent =
+                '<p dir="ltr" style="text-align: left;"></p>'
                 '<p><strong><span class="" style="color: #ef4540;"> '
-                '${am.local.name} </span></strong></p>';
+                '$resolvedActivityName </span></strong></p>';
 
-            _progressMessage = 'Label: ${am.local.name}';
+            _progressMessage = 'Label: $resolvedActivityName';
             notifyListeners();
 
             await _repo.updateModuleName(
               token,
               baseUrl,
               am.moodleModule!.id,
-              am.local.name,
+              resolvedActivityName,
             );
 
             await _repo.updateLabelContent(
@@ -239,8 +274,12 @@ class SyncController extends ChangeNotifier {
 
   /// Lê as seções e módulos do curso Moodle e constrói um [CourseConfig]
   /// com todos os IDs do Moodle já vinculados.
-  Future<CourseConfig> buildConfigFromMoodle(String token, String baseUrl,
-      MoodleCourse course, DateTime semesterStart) async {
+  Future<CourseConfig> buildConfigFromMoodle(
+    String token,
+    String baseUrl,
+    MoodleCourse course,
+    DateTime semesterStart,
+  ) async {
     _loading = true;
     _error = null;
     notifyListeners();
@@ -250,6 +289,13 @@ class SyncController extends ChangeNotifier {
       final uuid = const Uuid();
       final configSections = <SectionEntry>[];
       int orderIndex = 0;
+
+      // Data base normalizada (sem hora)
+      final semesterStartDay = DateTime(
+        semesterStart.year,
+        semesterStart.month,
+        semesterStart.day,
+      );
 
       for (final mSection in sections) {
         // Pular seção 0 "General" vazia
@@ -262,6 +308,10 @@ class SyncController extends ChangeNotifier {
         orderIndex++;
         final activities = <ActivityEntry>[];
 
+        // Encontrar a menor data de abertura dos módulos para estimar
+        // o referenceDaysOffset da seção
+        DateTime? earliestOpen;
+
         for (final mod in mSection.modules) {
           // Pular labels (áreas de texto) se não tiver nome
           if (mod.name.isEmpty) continue;
@@ -270,48 +320,146 @@ class SyncController extends ChangeNotifier {
           DateTime? openDate;
           DateTime? closeDate;
           for (final d in mod.dates) {
-            final label = d.label.toLowerCase();
-            if (label.contains('open') ||
-                label.contains('allowsubmissionsfromdate') ||
-                label.contains('timeopen') ||
-                label.contains('start')) {
-              if (d.timestamp > 0) openDate = d.dateTime;
-            }
-            if (label.contains('due') ||
-                label.contains('close') ||
-                label.contains('timeclose') ||
-                label.contains('cutoff') ||
-                label.contains('end')) {
-              if (d.timestamp > 0) closeDate ??= d.dateTime;
+            if (d.timestamp <= 0) continue;
+            if (d.isOpenDate) {
+              openDate = d.dateTime;
+            } else if (d.isCloseDate) {
+              closeDate ??= d.dateTime;
             }
           }
 
-          activities.add(ActivityEntry(
-            id: uuid.v4(),
-            name: mod.name,
-            activityType: _mapModName(mod.modname),
-            moodleModuleId: mod.id,
-            visible: mod.visible,
-            openDate: openDate,
-            closeDate: closeDate,
-          ));
+          if (openDate != null) {
+            if (earliestOpen == null || openDate.isBefore(earliestOpen)) {
+              earliestOpen = openDate;
+            }
+          }
+
+          activities.add(
+            ActivityEntry(
+              id: uuid.v4(),
+              name: mod.name,
+              activityType: _mapModName(mod.modname),
+              moodleModuleId: mod.id,
+              visible: mod.visible,
+              openDate: openDate,
+              closeDate: closeDate,
+            ),
+          );
         }
 
-        configSections.add(SectionEntry(
-          id: uuid.v4(),
-          orderIndex: orderIndex,
-          name: mSection.name.isNotEmpty
-              ? mSection.name
-              : 'Seção ${mSection.section}',
-          referenceDaysOffset: 0,
-          date: semesterStart,
-          offsetDays: 0,
-          moodleSectionId: mSection.id,
-          visible: mSection.visible,
-          activities: activities,
-          moodleDescription:
-              mSection.summary.isNotEmpty ? mSection.summary : null,
-        ));
+        // Calcular referenceDaysOffset: usar a menor data de abertura
+        // como referência da seção (7 dias alinhados se possível)
+        final int sectionOffset;
+        if (earliestOpen != null) {
+          final openDay = DateTime(
+            earliestOpen.year,
+            earliestOpen.month,
+            earliestOpen.day,
+          );
+          sectionOffset = openDay.difference(semesterStartDay).inDays;
+        } else {
+          // Sem datas: estimar offset pela ordem (7 dias por seção)
+          sectionOffset = (orderIndex - 1) * 7;
+        }
+
+        final sectionRefDate = semesterStartDay.add(
+          Duration(days: sectionOffset),
+        );
+
+        // Recalcular atividades com offsets relativos à seção
+        final activitiesWithOffsets = activities.map((activity) {
+          int? openOffsetDays;
+          int? closeOffsetDays;
+          int? openTimeMinutes;
+          int? closeTimeMinutes;
+
+          if (activity.openDate != null) {
+            final openDay = DateTime(
+              activity.openDate!.year,
+              activity.openDate!.month,
+              activity.openDate!.day,
+            );
+            openOffsetDays = openDay.difference(sectionRefDate).inDays;
+            openTimeMinutes =
+                activity.openDate!.hour * 60 + activity.openDate!.minute;
+          }
+
+          if (activity.closeDate != null) {
+            final closeDay = DateTime(
+              activity.closeDate!.year,
+              activity.closeDate!.month,
+              activity.closeDate!.day,
+            );
+            closeOffsetDays = closeDay.difference(sectionRefDate).inDays;
+            closeTimeMinutes =
+                activity.closeDate!.hour * 60 + activity.closeDate!.minute;
+          }
+
+          return activity.copyWith(
+            openOffsetDays: openOffsetDays,
+            closeOffsetDays: closeOffsetDays,
+            openTimeMinutes: openTimeMinutes,
+            closeTimeMinutes: closeTimeMinutes,
+          );
+        }).toList();
+
+        configSections.add(
+          SectionEntry(
+            id: uuid.v4(),
+            orderIndex: orderIndex,
+            name: mSection.name.isNotEmpty
+                ? mSection.name
+                : 'Seção ${mSection.section}',
+            referenceDaysOffset: sectionOffset,
+            date: sectionRefDate,
+            offsetDays: sectionOffset,
+            moodleSectionId: mSection.id,
+            visible: mSection.visible,
+            activities: activitiesWithOffsets,
+            moodleDescription: mSection.summary.isNotEmpty
+                ? mSection.summary
+                : null,
+          ),
+        );
+      }
+
+      // ── Substituir datas hardcoded por macros nos textos ──────────────────
+      for (int i = 0; i < configSections.length; i++) {
+        final section = configSections[i];
+        final sectionRefDate = semesterStartDay.add(
+          Duration(days: section.referenceDaysOffset),
+        );
+
+        final newName = MacroResolver.replaceDatesWithMacros(
+          section.name,
+          sectionRefDate,
+        );
+        final newDesc = section.moodleDescription != null
+            ? MacroResolver.replaceDatesWithMacros(
+                section.moodleDescription!,
+                sectionRefDate,
+              )
+            : null;
+
+        final updatedActivities = section.activities.map((activity) {
+          final openDate = activity.computeOpenDate(sectionRefDate);
+          final closeDate = activity.computeCloseDate(sectionRefDate);
+          final newActName = MacroResolver.replaceDatesWithMacros(
+            activity.name,
+            sectionRefDate,
+            activityOpenDate: openDate,
+            activityCloseDate: closeDate,
+          );
+          return newActName != activity.name
+              ? activity.copyWith(name: newActName)
+              : activity;
+        }).toList();
+
+        configSections[i] = section.copyWith(
+          name: newName,
+          moodleDescription: newDesc,
+          activities: updatedActivities,
+        );
       }
 
       final now = DateTime.now();
@@ -357,9 +505,5 @@ class ActivityMatch {
   final MoodleModule? moodleModule;
   final double score;
 
-  ActivityMatch({
-    required this.local,
-    this.moodleModule,
-    required this.score,
-  });
+  ActivityMatch({required this.local, this.moodleModule, required this.score});
 }

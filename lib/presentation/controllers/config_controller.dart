@@ -14,11 +14,14 @@ class ConfigController extends ChangeNotifier {
   CourseConfig? _current;
   bool _loading = false;
   String? _error;
+  final Set<String> _selectedActivityIds = {};
 
   List<CourseConfig> get configs => _configs;
   CourseConfig? get current => _current;
   bool get loading => _loading;
   String? get error => _error;
+  Set<String> get selectedActivityIds => _selectedActivityIds;
+  bool get hasSelection => _selectedActivityIds.isNotEmpty;
 
   Future<void> loadAll() async {
     _loading = true;
@@ -303,6 +306,12 @@ class ConfigController extends ChangeNotifier {
   Future<void> reorderActivities(
       String sectionId, int oldIndex, int newIndex) async {
     if (_current == null) return;
+
+    if (_selectedActivityIds.isNotEmpty) {
+      await _reorderSelectedActivities(sectionId, oldIndex, newIndex);
+      return;
+    }
+
     final sections = _current!.sections.map((s) {
       if (s.id != sectionId) return s;
       final list = [...s.activities];
@@ -312,6 +321,50 @@ class ConfigController extends ChangeNotifier {
       return s.copyWith(activities: list);
     }).toList();
     _current = _current!.copyWith(sections: sections);
+    await _repo.save(_current!);
+    notifyListeners();
+  }
+
+  Future<void> _reorderSelectedActivities(
+      String sectionId, int draggedIndex, int targetIndex) async {
+    if (_current == null) return;
+
+    // ReorderableListView convention: adjust targetIndex when moving down
+    if (targetIndex > draggedIndex) targetIndex--;
+
+    final sections = _current!.sections.map((s) {
+      if (s.id != sectionId) return s;
+      final activities = [...s.activities];
+      final selectedIds = _selectedActivityIds;
+
+      // Ensure dragged item is in selection
+      final draggedId = activities[draggedIndex].id;
+      if (!selectedIds.contains(draggedId)) {
+        // Fallback to single-item reorder
+        final item = activities.removeAt(draggedIndex);
+        activities.insert(targetIndex, item);
+        return s.copyWith(activities: activities);
+      }
+
+      // Extract selected items preserving their relative order
+      final selected =
+          activities.where((a) => selectedIds.contains(a.id)).toList();
+      final remaining =
+          activities.where((a) => !selectedIds.contains(a.id)).toList();
+
+      // Compute insertion index in the remaining list:
+      // Count how many non-selected items are before the target position
+      final insertAt = activities
+          .sublist(0, targetIndex + (targetIndex >= draggedIndex ? 1 : 0))
+          .where((a) => !selectedIds.contains(a.id))
+          .length
+          .clamp(0, remaining.length);
+
+      remaining.insertAll(insertAt, selected);
+      return s.copyWith(activities: remaining);
+    }).toList();
+    _current = _current!.copyWith(sections: sections);
+    _selectedActivityIds.clear();
     await _repo.save(_current!);
     notifyListeners();
   }
@@ -333,6 +386,80 @@ class ConfigController extends ChangeNotifier {
       return s.copyWith(activities: [...s.activities, moving!]);
     }).toList();
     _current = _current!.copyWith(sections: sections);
+    await _repo.save(_current!);
+    notifyListeners();
+  }
+
+  void toggleActivitySelection(String activityId) {
+    if (_selectedActivityIds.contains(activityId)) {
+      _selectedActivityIds.remove(activityId);
+    } else {
+      _selectedActivityIds.add(activityId);
+    }
+    notifyListeners();
+  }
+
+  void clearSelection() {
+    _selectedActivityIds.clear();
+    notifyListeners();
+  }
+
+  Future<void> moveSelectedActivities(String toSectionId) async {
+    if (_current == null || _selectedActivityIds.isEmpty) return;
+    final ids = Set<String>.from(_selectedActivityIds);
+    final List<ActivityEntry> moving = [];
+
+    var sections = _current!.sections.map((s) {
+      final toMove = s.activities.where((a) => ids.contains(a.id)).toList();
+      if (toMove.isEmpty) return s;
+      moving.addAll(toMove);
+      return s.copyWith(
+        activities: s.activities.where((a) => !ids.contains(a.id)).toList(),
+      );
+    }).toList();
+
+    if (moving.isEmpty) return;
+
+    sections = sections.map((s) {
+      if (s.id != toSectionId) return s;
+      return s.copyWith(activities: [...s.activities, ...moving]);
+    }).toList();
+
+    _current = _current!.copyWith(sections: sections);
+    _selectedActivityIds.clear();
+    await _repo.save(_current!);
+    notifyListeners();
+  }
+
+  /// Move selected activities to [toSectionId] inserting at [insertIndex].
+  /// Used for within-section reorder via drag-and-drop.
+  Future<void> moveSelectedActivitiesAtIndex(
+      String toSectionId, int insertIndex) async {
+    if (_current == null || _selectedActivityIds.isEmpty) return;
+    final ids = Set<String>.from(_selectedActivityIds);
+    final List<ActivityEntry> moving = [];
+
+    var sections = _current!.sections.map((s) {
+      final toMove = s.activities.where((a) => ids.contains(a.id)).toList();
+      if (toMove.isEmpty) return s;
+      moving.addAll(toMove);
+      return s.copyWith(
+        activities: s.activities.where((a) => !ids.contains(a.id)).toList(),
+      );
+    }).toList();
+
+    if (moving.isEmpty) return;
+
+    sections = sections.map((s) {
+      if (s.id != toSectionId) return s;
+      final list = [...s.activities];
+      final clampedIdx = insertIndex.clamp(0, list.length);
+      list.insertAll(clampedIdx, moving);
+      return s.copyWith(activities: list);
+    }).toList();
+
+    _current = _current!.copyWith(sections: sections);
+    _selectedActivityIds.clear();
     await _repo.save(_current!);
     notifyListeners();
   }

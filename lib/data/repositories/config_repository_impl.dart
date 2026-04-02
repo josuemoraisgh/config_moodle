@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:excel/excel.dart';
 import 'package:uuid/uuid.dart';
 import 'package:config_moodle/core/utils/date_calculator.dart';
+import 'package:config_moodle/core/utils/macro_resolver.dart';
 import 'package:config_moodle/data/datasources/local_datasource.dart';
 import 'package:config_moodle/domain/entities/course_config.dart';
 import 'package:config_moodle/domain/repositories/i_config_repository.dart';
@@ -32,8 +33,10 @@ class ConfigRepositoryImpl implements IConfigRepository {
   Future<void> delete(String id) => _local.delete(id);
 
   @override
-  Future<CourseConfig> importFromSpreadsheet(String filePath,
-      {String? replaceId}) async {
+  Future<CourseConfig> importFromSpreadsheet(
+    String filePath, {
+    String? replaceId,
+  }) async {
     final configs = parseSpreadsheet(filePath);
 
     if (configs.isEmpty) {
@@ -110,7 +113,8 @@ class ConfigRepositoryImpl implements IConfigRepository {
     if (value is DoubleCellValue) return value.value;
     if (value is DateCellValue) {
       return DateCalculator.toExcelSerial(
-          DateTime(value.year, value.month, value.day));
+        DateTime(value.year, value.month, value.day),
+      );
     }
     if (value is FormulaCellValue) {
       final formula = value.formula.trim();
@@ -166,7 +170,8 @@ class ConfigRepositoryImpl implements IConfigRepository {
           cache[_cellRef(r, c)] = val.value;
         } else if (val is DateCellValue) {
           final serial = DateCalculator.toExcelSerial(
-              DateTime(val.year, val.month, val.day));
+            DateTime(val.year, val.month, val.day),
+          );
           cache[_cellRef(r, c)] = serial;
         }
 
@@ -175,10 +180,14 @@ class ConfigRepositoryImpl implements IConfigRepository {
           for (int nc = c + 1; nc < row.length; nc++) {
             final dateVal = row[nc]?.value;
             if (dateVal is DateCellValue) {
-              semesterStart =
-                  DateTime(dateVal.year, dateVal.month, dateVal.day);
-              cache[_cellRef(r, nc)] =
-                  DateCalculator.toExcelSerial(semesterStart);
+              semesterStart = DateTime(
+                dateVal.year,
+                dateVal.month,
+                dateVal.day,
+              );
+              cache[_cellRef(r, nc)] = DateCalculator.toExcelSerial(
+                semesterStart,
+              );
               break;
             }
             final numVal = _resolveNumeric(dateVal, cache);
@@ -210,8 +219,9 @@ class ConfigRepositoryImpl implements IConfigRepository {
 
     // Mapear colunas pelo header
     final hdrRow = rawRows[headerRow];
-    final hdrTexts =
-        hdrRow.map((c) => _cellText(c?.value).toLowerCase()).toList();
+    final hdrTexts = hdrRow
+        .map((c) => _cellText(c?.value).toLowerCase())
+        .toList();
 
     int? colOrdem,
         colDiasInicio,
@@ -229,11 +239,13 @@ class ConfigRepositoryImpl implements IConfigRepository {
       if (h.contains('dias') && (h.contains('início') || h.contains('inicio')))
         colDiasInicio = c;
       if (h.contains('dias') &&
-          (h.contains('término') || h.contains('termino'))) colDiasTermino = c;
+          (h.contains('término') || h.contains('termino')))
+        colDiasTermino = c;
       if (h.contains('hora') && (h.contains('início') || h.contains('inicio')))
         colHoraInicio = c;
       if (h.contains('hora') &&
-          (h.contains('término') || h.contains('termino'))) colHoraTermino = c;
+          (h.contains('término') || h.contains('termino')))
+        colHoraTermino = c;
       if (h == 'nome') colNome = c;
       if (h == 'tipo') colTipo = c;
       if (h.contains('visível') || h.contains('visivel')) colVisivel = c;
@@ -319,8 +331,9 @@ class ConfigRepositoryImpl implements IConfigRepository {
         );
         sections.add(currentSection);
       } else if (currentSection != null) {
-        final sectionRefDate = semesterStart
-            .add(Duration(days: currentSection.referenceDaysOffset));
+        final sectionRefDate = semesterStart.add(
+          Duration(days: currentSection.referenceDaysOffset),
+        );
         final activity = ActivityEntry(
           id: _uuid.v4(),
           name: nome,
@@ -343,6 +356,45 @@ class ConfigRepositoryImpl implements IConfigRepository {
 
     if (sections.isEmpty) return null;
 
+    // ── Substituir datas hardcoded por macros nos textos ────────────────────
+    for (int i = 0; i < sections.length; i++) {
+      final section = sections[i];
+      final sectionRefDate = semesterStart.add(
+        Duration(days: section.referenceDaysOffset),
+      );
+
+      final newName = MacroResolver.replaceDatesWithMacros(
+        section.name,
+        sectionRefDate,
+      );
+      final newDesc = section.moodleDescription != null
+          ? MacroResolver.replaceDatesWithMacros(
+              section.moodleDescription!,
+              sectionRefDate,
+            )
+          : null;
+
+      final updatedActivities = section.activities.map((activity) {
+        final openDate = activity.computeOpenDate(sectionRefDate);
+        final closeDate = activity.computeCloseDate(sectionRefDate);
+        final newActName = MacroResolver.replaceDatesWithMacros(
+          activity.name,
+          sectionRefDate,
+          activityOpenDate: openDate,
+          activityCloseDate: closeDate,
+        );
+        return newActName != activity.name
+            ? activity.copyWith(name: newActName)
+            : activity;
+      }).toList();
+
+      sections[i] = section.copyWith(
+        name: newName,
+        moodleDescription: newDesc,
+        activities: updatedActivities,
+      );
+    }
+
     final now = DateTime.now();
     return CourseConfig(
       id: _uuid.v4(),
@@ -358,7 +410,10 @@ class ConfigRepositoryImpl implements IConfigRepository {
 
   /// Adiciona atividade à última seção da lista (atualiza imutável).
   void _addActivityToSection(
-      List<SectionEntry> sections, SectionEntry section, ActivityEntry act) {
+    List<SectionEntry> sections,
+    SectionEntry section,
+    ActivityEntry act,
+  ) {
     final idx = sections.indexOf(section);
     if (idx < 0) return;
     sections[idx] = section.copyWith(activities: [...section.activities, act]);
@@ -370,8 +425,9 @@ class ConfigRepositoryImpl implements IConfigRepository {
     if (config == null) throw Exception('Configuração não encontrada');
 
     final excel = Excel.createExcel();
-    final sheetName =
-        config.name.length > 31 ? config.name.substring(0, 31) : config.name;
+    final sheetName = config.name.length > 31
+        ? config.name.substring(0, 31)
+        : config.name;
     final sheet = excel[sheetName];
 
     // Header

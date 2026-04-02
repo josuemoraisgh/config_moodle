@@ -28,24 +28,29 @@ class MacroResolver {
   static final _dateFormat = DateFormat('dd/MM/yyyy');
 
   static final _pattern = RegExp(
-      r'<(DD/MM/YYYY|DD|D|MM|M|YYYY)\s*([+-]\s*\d+)?>(AI|AF)?',
-      caseSensitive: false);
+    r'<(DD/MM/YYYY|DD|D|MM|M|YYYY)\s*([+-]\s*\d+)?>(AI|AF)?',
+    caseSensitive: false,
+  );
 
   // Retorna [text] com todas as macros resolvidas.
   // [baseDate] é a data base (semesterStart).
   // [contextDate] é a data de referência da seção (se fornecida, usa como ref padrão).
   // [activityOpenDate] e [activityCloseDate] são usados com sufixos AI e AF.
-  static String resolve(String text, DateTime baseDate,
-      [DateTime? contextDate,
-      DateTime? activityOpenDate,
-      DateTime? activityCloseDate]) {
+  static String resolve(
+    String text,
+    DateTime baseDate, [
+    DateTime? contextDate,
+    DateTime? activityOpenDate,
+    DateTime? activityCloseDate,
+  ]) {
     final sectionRef = contextDate ?? baseDate;
     return text.replaceAllMapped(_pattern, (m) {
       final token = m.group(1)!.toUpperCase();
       final offsetStr = m.group(2);
       final suffix = m.group(3)?.toUpperCase();
-      final offset =
-          offsetStr != null ? int.parse(offsetStr.replaceAll(' ', '')) : 0;
+      final offset = offsetStr != null
+          ? int.parse(offsetStr.replaceAll(' ', ''))
+          : 0;
 
       // Escolher a data base conforme o sufixo
       DateTime? ref;
@@ -79,5 +84,73 @@ class MacroResolver {
           return m.group(0)!;
       }
     });
+  }
+
+  // ── Operação inversa: datas hardcoded → macros ──────────────────────────
+
+  // Aceita dia/mês com 1 ou 2 dígitos e ano com 4 dígitos
+  static final _dateReplacePattern = RegExp(r'\b(\d{1,2}/\d{1,2}/\d{4})\b');
+
+  /// Substitui datas hardcoded (d/M/yyyy ou dd/MM/yyyy) no [text] por macros.
+  ///
+  /// Prioridade:
+  ///  1. Se a data é exatamente igual à [activityOpenDate] → `<DD/MM/YYYY>AI`
+  ///  2. Se a data é exatamente igual à [activityCloseDate] → `<DD/MM/YYYY>AF`
+  ///  3. Caso contrário, calcula o offset em dias a partir de [sectionRefDate]
+  ///     e gera `<DD/MM/YYYY>`, `<DD/MM/YYYY + N>` ou `<DD/MM/YYYY - N>`.
+  static String replaceDatesWithMacros(
+    String text,
+    DateTime sectionRefDate, {
+    DateTime? activityOpenDate,
+    DateTime? activityCloseDate,
+  }) {
+    return text.replaceAllMapped(_dateReplacePattern, (match) {
+      final dateStr = match.group(1)!;
+      final parsed = _tryParseDate(dateStr);
+      if (parsed == null) return dateStr;
+
+      // Prioridade 1: data exata de início da atividade (AI)
+      if (activityOpenDate != null && _sameDay(parsed, activityOpenDate)) {
+        return '<DD/MM/YYYY>AI';
+      }
+
+      // Prioridade 2: data exata de fim da atividade (AF)
+      if (activityCloseDate != null && _sameDay(parsed, activityCloseDate)) {
+        return '<DD/MM/YYYY>AF';
+      }
+
+      // Prioridade 3: offset relativo à data de referência da seção
+      final refNormalized = DateTime(
+        sectionRefDate.year,
+        sectionRefDate.month,
+        sectionRefDate.day,
+      );
+      final offset = parsed.difference(refNormalized).inDays;
+      if (offset == 0) {
+        return '<DD/MM/YYYY>';
+      } else if (offset > 0) {
+        return '<DD/MM/YYYY + $offset>';
+      } else {
+        return '<DD/MM/YYYY - ${offset.abs()}>';
+      }
+    });
+  }
+
+  static bool _sameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  /// Tenta parsear data nos formatos dd/MM/yyyy, d/M/yyyy e variações.
+  static DateTime? _tryParseDate(String text) {
+    final parts = text.split('/');
+    if (parts.length != 3) return null;
+    final day = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]);
+    final year = int.tryParse(parts[2]);
+    if (day == null || month == null || year == null) return null;
+    if (day < 1 || day > 31 || month < 1 || month > 12 || year < 1900) {
+      return null;
+    }
+    return DateTime(year, month, day);
   }
 }
