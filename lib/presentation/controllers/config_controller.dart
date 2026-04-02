@@ -124,8 +124,9 @@ class ConfigController extends ChangeNotifier {
 
     final updatedSections = _current!.sections.map((section) {
       final newSectionDate = section.date.add(Duration(days: offsetShift));
-      final sectionRefDate =
-          newDate.add(Duration(days: section.referenceDaysOffset));
+      final sectionRefDate = newDate.add(
+        Duration(days: section.referenceDaysOffset),
+      );
       final updatedActivities = section.activities.map((activity) {
         // Recomputar datas absolutas a partir dos offsets
         return activity.copyWith(
@@ -151,8 +152,10 @@ class ConfigController extends ChangeNotifier {
 
   Future<void> addSection(String name, DateTime date) async {
     if (_current == null) return;
-    final offset =
-        DateCalculator.calculateOffset(_current!.semesterStartDate, date);
+    final offset = DateCalculator.calculateOffset(
+      _current!.semesterStartDate,
+      date,
+    );
     final section = SectionEntry(
       id: _uuid.v4(),
       orderIndex: _current!.sections.length + 1,
@@ -161,26 +164,28 @@ class ConfigController extends ChangeNotifier {
       date: date,
       offsetDays: offset,
     );
-    _current = _current!.copyWith(
-      sections: [..._current!.sections, section],
-    );
+    _current = _current!.copyWith(sections: [..._current!.sections, section]);
     await _repo.save(_current!);
     notifyListeners();
   }
 
-  Future<void> updateSection(String sectionId,
-      {String? name,
-      int? referenceDaysOffset,
-      DateTime? date,
-      bool? visible}) async {
+  Future<void> updateSection(
+    String sectionId, {
+    String? name,
+    int? referenceDaysOffset,
+    DateTime? date,
+    bool? visible,
+  }) async {
     if (_current == null) return;
     final sections = _current!.sections.map((s) {
       if (s.id != sectionId) return s;
       final newRefOffset = referenceDaysOffset ?? s.referenceDaysOffset;
       final newDate =
           date ?? _current!.semesterStartDate.add(Duration(days: newRefOffset));
-      final newOffsetDays =
-          DateCalculator.calculateOffset(_current!.semesterStartDate, newDate);
+      final newOffsetDays = DateCalculator.calculateOffset(
+        _current!.semesterStartDate,
+        newDate,
+      );
       return s.copyWith(
         name: name,
         referenceDaysOffset: newRefOffset,
@@ -196,8 +201,23 @@ class ConfigController extends ChangeNotifier {
 
   Future<void> removeSection(String sectionId) async {
     if (_current == null) return;
-    final sections =
-        _current!.sections.where((s) => s.id != sectionId).toList();
+    final sections = _current!.sections
+        .where((s) => s.id != sectionId)
+        .toList();
+    _current = _current!.copyWith(sections: sections);
+    await _repo.save(_current!);
+    notifyListeners();
+  }
+
+  Future<void> reorderSections(int oldIndex, int newIndex) async {
+    if (_current == null) return;
+    final sections = [..._current!.sections];
+    final item = sections.removeAt(oldIndex);
+    if (newIndex > oldIndex) newIndex--;
+    sections.insert(newIndex, item);
+    for (var i = 0; i < sections.length; i++) {
+      sections[i] = sections[i].copyWith(orderIndex: i + 1);
+    }
     _current = _current!.copyWith(sections: sections);
     await _repo.save(_current!);
     notifyListeners();
@@ -205,16 +225,21 @@ class ConfigController extends ChangeNotifier {
 
   // ── CRUD Atividades ───────────────────────────────────────────────────────
 
-  Future<void> addActivity(String sectionId, String name, String type,
-      {int? openOffsetDays,
-      int? closeOffsetDays,
-      int? openTimeMinutes,
-      int? closeTimeMinutes,
-      int? moodleModuleId}) async {
+  Future<void> addActivity(
+    String sectionId,
+    String name,
+    String type, {
+    int? openOffsetDays,
+    int? closeOffsetDays,
+    int? openTimeMinutes,
+    int? closeTimeMinutes,
+    int? moodleModuleId,
+  }) async {
     if (_current == null) return;
     final section = _current!.sections.firstWhere((s) => s.id == sectionId);
-    final sectionRefDate = _current!.semesterStartDate
-        .add(Duration(days: section.referenceDaysOffset));
+    final sectionRefDate = _current!.semesterStartDate.add(
+      Duration(days: section.referenceDaysOffset),
+    );
     final activity = ActivityEntry(
       id: _uuid.v4(),
       name: name,
@@ -241,20 +266,24 @@ class ConfigController extends ChangeNotifier {
 
   static const _sentinel = Object();
 
-  Future<void> updateActivity(String sectionId, String activityId,
-      {String? name,
-      String? type,
-      Object? openOffsetDays = _sentinel,
-      Object? closeOffsetDays = _sentinel,
-      Object? openTimeMinutes = _sentinel,
-      Object? closeTimeMinutes = _sentinel,
-      Object? moodleModuleId = _sentinel,
-      bool? visible}) async {
+  Future<void> updateActivity(
+    String sectionId,
+    String activityId, {
+    String? name,
+    String? type,
+    Object? openOffsetDays = _sentinel,
+    Object? closeOffsetDays = _sentinel,
+    Object? openTimeMinutes = _sentinel,
+    Object? closeTimeMinutes = _sentinel,
+    Object? moodleModuleId = _sentinel,
+    bool? visible,
+  }) async {
     if (_current == null) return;
     final sections = _current!.sections.map((s) {
       if (s.id != sectionId) return s;
-      final sectionRefDate = _current!.semesterStartDate
-          .add(Duration(days: s.referenceDaysOffset));
+      final sectionRefDate = _current!.semesterStartDate.add(
+        Duration(days: s.referenceDaysOffset),
+      );
       final activities = s.activities.map((a) {
         if (a.id != activityId) return a;
         final updated = a.copyWith(
@@ -304,7 +333,10 @@ class ConfigController extends ChangeNotifier {
   }
 
   Future<void> reorderActivities(
-      String sectionId, int oldIndex, int newIndex) async {
+    String sectionId,
+    int oldIndex,
+    int newIndex,
+  ) async {
     if (_current == null) return;
 
     if (_selectedActivityIds.isNotEmpty) {
@@ -326,7 +358,10 @@ class ConfigController extends ChangeNotifier {
   }
 
   Future<void> _reorderSelectedActivities(
-      String sectionId, int draggedIndex, int targetIndex) async {
+    String sectionId,
+    int draggedIndex,
+    int targetIndex,
+  ) async {
     if (_current == null) return;
 
     // ReorderableListView convention: adjust targetIndex when moving down
@@ -347,10 +382,12 @@ class ConfigController extends ChangeNotifier {
       }
 
       // Extract selected items preserving their relative order
-      final selected =
-          activities.where((a) => selectedIds.contains(a.id)).toList();
-      final remaining =
-          activities.where((a) => !selectedIds.contains(a.id)).toList();
+      final selected = activities
+          .where((a) => selectedIds.contains(a.id))
+          .toList();
+      final remaining = activities
+          .where((a) => !selectedIds.contains(a.id))
+          .toList();
 
       // Compute insertion index in the remaining list:
       // Count how many non-selected items are before the target position
@@ -370,7 +407,10 @@ class ConfigController extends ChangeNotifier {
   }
 
   Future<void> moveActivity(
-      String fromSectionId, String toSectionId, String activityId) async {
+    String fromSectionId,
+    String toSectionId,
+    String activityId,
+  ) async {
     if (_current == null) return;
     ActivityEntry? moving;
     var sections = _current!.sections.map((s) {
@@ -434,7 +474,9 @@ class ConfigController extends ChangeNotifier {
   /// Move selected activities to [toSectionId] inserting at [insertIndex].
   /// Used for within-section reorder via drag-and-drop.
   Future<void> moveSelectedActivitiesAtIndex(
-      String toSectionId, int insertIndex) async {
+    String toSectionId,
+    int insertIndex,
+  ) async {
     if (_current == null || _selectedActivityIds.isEmpty) return;
     final ids = Set<String>.from(_selectedActivityIds);
     final List<ActivityEntry> moving = [];
@@ -472,7 +514,9 @@ class ConfigController extends ChangeNotifier {
   }
 
   Future<void> linkMoodleCourse(
-      int moodleCourseId, String moodleCourseName) async {
+    int moodleCourseId,
+    String moodleCourseName,
+  ) async {
     if (_current == null) return;
     _current = _current!.copyWith(
       moodleCourseId: moodleCourseId,
@@ -483,7 +527,9 @@ class ConfigController extends ChangeNotifier {
   }
 
   Future<void> linkSectionToMoodle(
-      String sectionId, int? moodleSectionId) async {
+    String sectionId,
+    int? moodleSectionId,
+  ) async {
     if (_current == null) return;
     final sections = _current!.sections.map((s) {
       if (s.id != sectionId) return s;
@@ -495,7 +541,10 @@ class ConfigController extends ChangeNotifier {
   }
 
   Future<void> linkActivityToMoodle(
-      String sectionId, String activityId, int? moodleModuleId) async {
+    String sectionId,
+    String activityId,
+    int? moodleModuleId,
+  ) async {
     if (_current == null) return;
     final sections = _current!.sections.map((s) {
       if (s.id != sectionId) return s;

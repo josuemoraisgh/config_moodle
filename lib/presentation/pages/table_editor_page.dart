@@ -446,17 +446,28 @@ class _TableEditorPageState extends State<TableEditorPage> {
     CourseConfig config,
     ConfigController ctrl,
   ) {
-    return ListView.builder(
-      controller: _scrollController,
+    return ReorderableListView.builder(
+      scrollController: _scrollController,
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 80),
+      buildDefaultDragHandles: false,
+      proxyDecorator: (child, index, animation) =>
+          Material(color: Colors.transparent, elevation: 0, child: child),
+      onReorder: (oldIndex, newIndex) =>
+          ctrl.reorderSections(oldIndex, newIndex),
       itemCount: config.sections.length,
       itemBuilder: (context, index) {
         final section = config.sections[index];
-        return _buildSectionTile(
-          context,
-          section,
-          ctrl,
-          config.semesterStartDate,
+        final previousSection = index > 0 ? config.sections[index - 1] : null;
+        return KeyedSubtree(
+          key: ValueKey(section.id),
+          child: _buildSectionTile(
+            context,
+            section,
+            ctrl,
+            config.semesterStartDate,
+            index,
+            previousSection,
+          ),
         );
       },
     );
@@ -467,6 +478,8 @@ class _TableEditorPageState extends State<TableEditorPage> {
     SectionEntry section,
     ConfigController ctrl,
     DateTime semesterStart,
+    int index,
+    SectionEntry? previousSection,
   ) {
     final isLinked = section.moodleSectionId != null;
     final isHovering = _hoveringSectionId == section.id;
@@ -532,23 +545,26 @@ class _TableEditorPageState extends State<TableEditorPage> {
                   initiallyExpanded: _allExpanded,
                   tilePadding: EdgeInsets.zero,
                   childrenPadding: EdgeInsets.zero,
-                  leading: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: section.visible
-                          ? AppTheme.primary.withAlpha(30)
-                          : AppTheme.danger.withAlpha(30),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Center(
-                      child: Text(
-                        '${section.orderIndex}',
-                        style: TextStyle(
-                          color: section.visible
-                              ? AppTheme.primary
-                              : AppTheme.danger,
-                          fontWeight: FontWeight.bold,
+                  leading: ReorderableDragStartListener(
+                    index: index,
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: section.visible
+                            ? AppTheme.primary.withAlpha(30)
+                            : AppTheme.danger.withAlpha(30),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${section.orderIndex}',
+                          style: TextStyle(
+                            color: section.visible
+                                ? AppTheme.primary
+                                : AppTheme.danger,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
@@ -609,7 +625,9 @@ class _TableEditorPageState extends State<TableEditorPage> {
                       if (section.referenceDaysOffset != 0) ...[
                         const SizedBox(width: 8),
                         StatusChip(
-                          label: '+${section.referenceDaysOffset}d',
+                          label: previousSection == null
+                              ? '+${section.referenceDaysOffset}d'
+                              : '+${section.referenceDaysOffset - previousSection.referenceDaysOffset}d',
                           color: AppTheme.accent,
                         ),
                       ],
@@ -639,8 +657,12 @@ class _TableEditorPageState extends State<TableEditorPage> {
                           color: AppTheme.accentGreen,
                           size: 20,
                         ),
-                        onPressed: () =>
-                            _showEditSectionDialog(context, section, ctrl),
+                        onPressed: () => _showEditSectionDialog(
+                          context,
+                          section,
+                          ctrl,
+                          previousSection,
+                        ),
                       ),
                       PopupMenuButton<String>(
                         icon: const Icon(
@@ -651,7 +673,12 @@ class _TableEditorPageState extends State<TableEditorPage> {
                         color: AppTheme.bgSurface,
                         onSelected: (v) {
                           if (v == 'edit') {
-                            _showEditSectionDialog(context, section, ctrl);
+                            _showEditSectionDialog(
+                              context,
+                              section,
+                              ctrl,
+                              previousSection,
+                            );
                           } else if (v == 'delete') {
                             ctrl.removeSection(section.id);
                           } else if (v == 'add_activity') {
@@ -1263,11 +1290,14 @@ class _TableEditorPageState extends State<TableEditorPage> {
     BuildContext context,
     SectionEntry section,
     ConfigController ctrl,
+    SectionEntry? previousSection,
   ) {
     final nameCtrl = TextEditingController(text: section.name);
-    final daysCtrl = TextEditingController(
-      text: section.referenceDaysOffset.toString(),
-    );
+    final isFirst = previousSection == null;
+    final displayOffset = isFirst
+        ? section.referenceDaysOffset
+        : section.referenceDaysOffset - previousSection.referenceDaysOffset;
+    final daysCtrl = TextEditingController(text: displayOffset.toString());
 
     final sync = context.read<SyncController>();
     final hasMoodleData = sync.moodleSections.isNotEmpty;
@@ -1300,8 +1330,10 @@ class _TableEditorPageState extends State<TableEditorPage> {
                 const SizedBox(height: 16),
                 TextField(
                   controller: daysCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Dias a partir do início do semestre',
+                  decoration: InputDecoration(
+                    labelText: isFirst
+                        ? 'Dias a partir do início do semestre'
+                        : 'Dias depois do início da sessão anterior',
                     hintText: '0',
                   ),
                   keyboardType: TextInputType.number,
@@ -1382,10 +1414,14 @@ class _TableEditorPageState extends State<TableEditorPage> {
             ),
             ElevatedButton(
               onPressed: () {
+                final enteredDays = int.tryParse(daysCtrl.text.trim()) ?? 0;
+                final absoluteOffset = isFirst
+                    ? enteredDays
+                    : previousSection!.referenceDaysOffset + enteredDays;
                 ctrl.updateSection(
                   section.id,
                   name: nameCtrl.text.trim(),
-                  referenceDaysOffset: int.tryParse(daysCtrl.text.trim()) ?? 0,
+                  referenceDaysOffset: absoluteOffset,
                 );
                 ctrl.linkSectionToMoodle(section.id, selectedMoodleSectionId);
                 Navigator.pop(context);
