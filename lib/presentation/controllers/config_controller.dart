@@ -463,6 +463,41 @@ class ConfigController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Move a single activity to [toSectionId] at [insertIndex].
+  /// Works for both cross-section and within-section repositioning.
+  Future<void> moveActivityToIndex(
+    String fromSectionId,
+    String toSectionId,
+    String activityId,
+    int insertIndex,
+  ) async {
+    if (_current == null) return;
+    ActivityEntry? moving;
+
+    // Remove from source
+    var sections = _current!.sections.map((s) {
+      if (s.id != fromSectionId) return s;
+      moving = s.activities.firstWhere((a) => a.id == activityId);
+      return s.copyWith(
+        activities: s.activities.where((a) => a.id != activityId).toList(),
+      );
+    }).toList();
+    if (moving == null) return;
+
+    // Insert at target index
+    sections = sections.map((s) {
+      if (s.id != toSectionId) return s;
+      final list = [...s.activities];
+      final clampedIdx = insertIndex.clamp(0, list.length);
+      list.insert(clampedIdx, moving!);
+      return s.copyWith(activities: list);
+    }).toList();
+
+    _current = _current!.copyWith(sections: sections);
+    await _repo.save(_current!);
+    notifyListeners();
+  }
+
   void toggleActivitySelection(String activityId) {
     if (_selectedActivityIds.contains(activityId)) {
       _selectedActivityIds.remove(activityId);

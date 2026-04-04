@@ -35,9 +35,14 @@ class _TableEditorPageState extends State<TableEditorPage> {
   bool _allExpanded = true;
   int _expandToggleKey = 0;
   bool _isDraggingSelection = false;
+  bool _isDraggingSingle = false;
   String? _hoveringActivityId;
   bool _evaluated = false;
   bool _evaluating = false;
+
+  // Auto-scroll during drag
+  bool _autoScrolling = false;
+  double _autoScrollSpeed = 0;
 
   static const _typesWithTime = {
     'Tarefa',
@@ -118,8 +123,65 @@ class _TableEditorPageState extends State<TableEditorPage> {
 
   @override
   void dispose() {
+    _stopAutoScroll();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  bool get _isDragging => _isDraggingSelection || _isDraggingSingle;
+
+  void _stopAutoScroll() {
+    _autoScrolling = false;
+    _autoScrollSpeed = 0;
+  }
+
+  void _handlePointerMoveDuringDrag(PointerEvent event) {
+    if (!_isDragging) {
+      _stopAutoScroll();
+      return;
+    }
+    final renderBox = context.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+    final size = renderBox.size;
+    final localY = renderBox.globalToLocal(event.position).dy;
+    const edgeZone = 80.0;
+    const maxSpeed = 15.0;
+
+    if (localY < edgeZone) {
+      // Near top — scroll up
+      final ratio = (edgeZone - localY) / edgeZone;
+      _autoScrollSpeed = -maxSpeed * ratio;
+      _startAutoScroll();
+    } else if (localY > size.height - edgeZone) {
+      // Near bottom — scroll down
+      final ratio = (localY - (size.height - edgeZone)) / edgeZone;
+      _autoScrollSpeed = maxSpeed * ratio;
+      _startAutoScroll();
+    } else {
+      _stopAutoScroll();
+    }
+  }
+
+  void _startAutoScroll() {
+    if (_autoScrolling) return;
+    _autoScrolling = true;
+    _autoScrollTick();
+  }
+
+  void _autoScrollTick() {
+    if (!_autoScrolling || !mounted) return;
+    if (!_isDragging) {
+      _stopAutoScroll();
+      return;
+    }
+    final sc = _scrollController;
+    if (!sc.hasClients) return;
+    final newOffset = (sc.offset + _autoScrollSpeed).clamp(
+      sc.position.minScrollExtent,
+      sc.position.maxScrollExtent,
+    );
+    sc.jumpTo(newOffset);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _autoScrollTick());
   }
 
   @override
@@ -160,7 +222,10 @@ class _TableEditorPageState extends State<TableEditorPage> {
                           onPressed: () => _showAddSectionDialog(context, ctrl),
                         ),
                       )
-                    : _buildSectionsList(context, config, ctrl),
+                    : Listener(
+                        onPointerMove: _handlePointerMoveDuringDrag,
+                        child: _buildSectionsList(context, config, ctrl),
+                      ),
               ),
             ],
           ),
@@ -719,8 +784,10 @@ class _TableEditorPageState extends State<TableEditorPage> {
         setState(() {
           _hoveringSectionId = null;
           _isDraggingSelection = false;
+          _isDraggingSingle = false;
           _hoveringActivityId = null;
         });
+        _stopAutoScroll();
         final data = details.data;
         final fromSectionId = data['fromSectionId']!;
         final activityId = data['activityId']!;
@@ -1033,7 +1100,7 @@ class _TableEditorPageState extends State<TableEditorPage> {
                       ),
                       margin: const EdgeInsets.only(top: 4),
                       padding: const EdgeInsets.only(top: 8, bottom: 4),
-                      child: ctrl.hasSelection
+                      child: (ctrl.hasSelection || _isDraggingSingle)
                           ? Column(
                               children: [
                                 for (
@@ -1060,12 +1127,27 @@ class _TableEditorPageState extends State<TableEditorPage> {
                                   onAcceptWithDetails: (details) {
                                     setState(() {
                                       _isDraggingSelection = false;
+                                      _isDraggingSingle = false;
                                       _hoveringActivityId = null;
                                     });
-                                    ctrl.moveSelectedActivitiesAtIndex(
-                                      section.id,
-                                      section.activities.length,
-                                    );
+                                    _stopAutoScroll();
+                                    final data = details.data;
+                                    final fromSectionId =
+                                        data['fromSectionId']!;
+                                    final activityId = data['activityId']!;
+                                    if (ctrl.hasSelection) {
+                                      ctrl.moveSelectedActivitiesAtIndex(
+                                        section.id,
+                                        section.activities.length,
+                                      );
+                                    } else {
+                                      ctrl.moveActivityToIndex(
+                                        fromSectionId,
+                                        section.id,
+                                        activityId,
+                                        section.activities.length,
+                                      );
+                                    }
                                   },
                                   builder: (context, candidateData, _) {
                                     return Container(
@@ -1166,9 +1248,19 @@ class _TableEditorPageState extends State<TableEditorPage> {
       onAcceptWithDetails: (details) {
         setState(() {
           _isDraggingSelection = false;
+          _isDraggingSingle = false;
           _hoveringActivityId = null;
         });
-        ctrl.moveSelectedActivitiesAtIndex(sectionId, index);
+        _stopAutoScroll();
+        final data = details.data;
+        final fromSectionId = data['fromSectionId']!;
+        final activityId = data['activityId']!;
+        if (ctrl.hasSelection) {
+          ctrl.moveSelectedActivitiesAtIndex(sectionId, index);
+        } else {
+          // Single activity positional move
+          ctrl.moveActivityToIndex(fromSectionId, sectionId, activityId, index);
+        }
       },
       builder: (context, candidateData, _) {
         return Column(
@@ -1544,9 +1636,14 @@ class _TableEditorPageState extends State<TableEditorPage> {
       finalChild = Draggable<Map<String, String>>(
         data: {'fromSectionId': sectionId, 'activityId': activity.id},
         onDragStarted: () => setState(() => _isDraggingSelection = true),
-        onDragEnd: (_) => setState(() => _isDraggingSelection = false),
-        onDraggableCanceled: (_, _) =>
-            setState(() => _isDraggingSelection = false),
+        onDragEnd: (_) {
+          setState(() => _isDraggingSelection = false);
+          _stopAutoScroll();
+        },
+        onDraggableCanceled: (_, _) {
+          setState(() => _isDraggingSelection = false);
+          _stopAutoScroll();
+        },
         feedback: Material(
           color: Colors.transparent,
           child: Container(
@@ -1572,7 +1669,45 @@ class _TableEditorPageState extends State<TableEditorPage> {
         child: tappableRow,
       );
     } else {
-      finalChild = tappableRow;
+      // Single activity: LongPressDraggable for cross-section moves
+      finalChild = LongPressDraggable<Map<String, String>>(
+        data: {'fromSectionId': sectionId, 'activityId': activity.id},
+        delay: const Duration(milliseconds: 300),
+        onDragStarted: () => setState(() => _isDraggingSingle = true),
+        onDragEnd: (_) {
+          setState(() => _isDraggingSingle = false);
+          _stopAutoScroll();
+        },
+        onDraggableCanceled: (_, _) {
+          setState(() => _isDraggingSingle = false);
+          _stopAutoScroll();
+        },
+        feedback: Material(
+          color: Colors.transparent,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppTheme.accent,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.drag_indicator, color: Colors.white, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  activity.name.length > 30
+                      ? '${activity.name.substring(0, 30)}...'
+                      : activity.name,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+        ),
+        childWhenDragging: Opacity(opacity: 0.3, child: tappableRow),
+        child: tappableRow,
+      );
     }
 
     return Padding(
