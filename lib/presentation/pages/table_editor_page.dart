@@ -1217,6 +1217,10 @@ class _TableEditorPageState extends State<TableEditorPage> {
       activity.computeCloseDate(sectionRefDate),
     );
     final isHoliday = ctrl.activityMatchesHoliday(resolvedName);
+    final isWeekdayMismatch = ctrl.activityWeekdayMismatch(
+      activity,
+      sectionRefDate,
+    );
 
     // During multi-drag, hide all selected items (they appear in the feedback)
     if (_isDraggingSelection && isSelected) {
@@ -1236,8 +1240,14 @@ class _TableEditorPageState extends State<TableEditorPage> {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: AppTheme.danger.withAlpha(80)),
             )
+          : isWeekdayMismatch
+          ? BoxDecoration(
+              color: Colors.amber.withAlpha(40),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.amber.withAlpha(80)),
+            )
           : null,
-      padding: (isSelected || isHoliday)
+      padding: (isSelected || isHoliday || isWeekdayMismatch)
           ? const EdgeInsets.symmetric(horizontal: 4, vertical: 2)
           : null,
       child: Row(
@@ -2030,6 +2040,18 @@ class _TableEditorPageState extends State<TableEditorPage> {
     final type = activity.activityType;
     int? openTimeMinutes = activity.openTimeMinutes;
     int? closeTimeMinutes = activity.closeTimeMinutes;
+    int? expectedWeekday = activity.expectedWeekday;
+
+    const weekdayItems = [
+      DropdownMenuItem<int?>(value: null, child: Text('Nenhum')),
+      DropdownMenuItem<int?>(value: 1, child: Text('Segunda')),
+      DropdownMenuItem<int?>(value: 2, child: Text('Terça')),
+      DropdownMenuItem<int?>(value: 3, child: Text('Quarta')),
+      DropdownMenuItem<int?>(value: 4, child: Text('Quinta')),
+      DropdownMenuItem<int?>(value: 5, child: Text('Sexta')),
+      DropdownMenuItem<int?>(value: 6, child: Text('Sábado')),
+      DropdownMenuItem<int?>(value: 7, child: Text('Domingo')),
+    ];
 
     showDialog(
       context: context,
@@ -2134,6 +2156,33 @@ class _TableEditorPageState extends State<TableEditorPage> {
                         onChanged: (m) => setState(() => closeTimeMinutes = m),
                       ),
                     ],
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.calendar_month,
+                          color: Colors.amber,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: DropdownButtonFormField<int?>(
+                            value: expectedWeekday,
+                            decoration: const InputDecoration(
+                              labelText: 'Dia da semana esperado',
+                              helperText: 'Se não bater, fica amarelo',
+                              helperStyle: TextStyle(
+                                color: AppTheme.textSecondary,
+                                fontSize: 11,
+                              ),
+                            ),
+                            items: weekdayItems,
+                            onChanged: (v) =>
+                                setState(() => expectedWeekday = v),
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -2152,6 +2201,7 @@ class _TableEditorPageState extends State<TableEditorPage> {
                     closeOffsetDays: int.tryParse(closeOffsetCtrl.text),
                     openTimeMinutes: withTime ? openTimeMinutes : null,
                     closeTimeMinutes: withTime ? closeTimeMinutes : null,
+                    expectedWeekday: expectedWeekday,
                   );
                   Navigator.pop(context);
                 },
@@ -2324,74 +2374,226 @@ class _HolidayDatesDialog extends StatefulWidget {
   State<_HolidayDatesDialog> createState() => _HolidayDatesDialogState();
 }
 
-class _HolidayDatesDialogState extends State<_HolidayDatesDialog> {
+class _HolidayDatesDialogState extends State<_HolidayDatesDialog>
+    with SingleTickerProviderStateMixin {
   final _df = DateFormat('dd/MM/yyyy');
+  late TabController _tabCtrl;
+
+  static const _weekdayNames = [
+    '',
+    'Segunda',
+    'Terça',
+    'Quarta',
+    'Quinta',
+    'Sexta',
+    'Sábado',
+    'Domingo',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabCtrl = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: widget.ctrl,
       builder: (context, _) {
-        final dates = widget.ctrl.holidayDates;
+        final holidays = widget.ctrl.holidayDates;
+        final swaps = widget.ctrl.daySwapDates;
+        final sortedSwapKeys = swaps.keys.toList()
+          ..sort((a, b) => a.compareTo(b));
         return AlertDialog(
           title: Row(
             children: [
               const Icon(Icons.event_busy, color: AppTheme.danger),
               const SizedBox(width: 8),
               const Text('Datas Especiais'),
-              const Spacer(),
-              IconButton(
-                icon: const Icon(Icons.add_circle, color: AppTheme.accentGreen),
-                tooltip: 'Adicionar data',
-                onPressed: () => _pickDate(context),
-              ),
             ],
           ),
           content: SizedBox(
-            width: 360,
-            child: dates.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Center(
-                      child: Text(
-                        'Nenhuma data especial adicionada.\n'
-                        'Atividades com essas datas no nome\n'
-                        'serão destacadas em vermelho.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: AppTheme.textSecondary,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                  )
-                : ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: dates.length,
-                    itemBuilder: (context, index) {
-                      final date = dates[index];
-                      return ListTile(
-                        dense: true,
-                        leading: const Icon(
-                          Icons.calendar_today,
-                          size: 18,
-                          color: AppTheme.danger,
-                        ),
-                        title: Text(
-                          _df.format(date),
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                        trailing: IconButton(
-                          icon: const Icon(
-                            Icons.remove_circle_outline,
-                            color: AppTheme.danger,
-                            size: 20,
+            width: 420,
+            height: 400,
+            child: Column(
+              children: [
+                TabBar(
+                  controller: _tabCtrl,
+                  indicatorColor: AppTheme.accent,
+                  labelColor: AppTheme.textPrimary,
+                  unselectedLabelColor: AppTheme.textSecondary,
+                  tabs: const [
+                    Tab(text: 'Feriados / Sem aula'),
+                    Tab(text: 'Troca de dia'),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabCtrl,
+                    children: [
+                      // ── Tab 1: Feriados ──
+                      Column(
+                        children: [
+                          Row(
+                            children: [
+                              const Expanded(
+                                child: Text(
+                                  'Datas em que não haverá aula.\n'
+                                  'Atividades nessas datas ficam em vermelho.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppTheme.textSecondary,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.add_circle,
+                                  color: AppTheme.accentGreen,
+                                ),
+                                tooltip: 'Adicionar feriado',
+                                onPressed: () => _pickHolidayDate(context),
+                              ),
+                            ],
                           ),
-                          onPressed: () => widget.ctrl.removeHolidayDate(date),
-                        ),
-                      );
-                    },
+                          const SizedBox(height: 4),
+                          Expanded(
+                            child: holidays.isEmpty
+                                ? const Center(
+                                    child: Text(
+                                      'Nenhum feriado adicionado.',
+                                      style: TextStyle(
+                                        color: AppTheme.textSecondary,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  )
+                                : ListView.builder(
+                                    itemCount: holidays.length,
+                                    itemBuilder: (context, index) {
+                                      final date = holidays[index];
+                                      return ListTile(
+                                        dense: true,
+                                        leading: const Icon(
+                                          Icons.block,
+                                          size: 18,
+                                          color: AppTheme.danger,
+                                        ),
+                                        title: Text(
+                                          _df.format(date),
+                                          style: const TextStyle(fontSize: 14),
+                                        ),
+                                        subtitle: Text(
+                                          _weekdayNames[date.weekday],
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: AppTheme.textSecondary,
+                                          ),
+                                        ),
+                                        trailing: IconButton(
+                                          icon: const Icon(
+                                            Icons.remove_circle_outline,
+                                            color: AppTheme.danger,
+                                            size: 20,
+                                          ),
+                                          onPressed: () => widget.ctrl
+                                              .removeHolidayDate(date),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
+                      ),
+                      // ── Tab 2: Troca de dia ──
+                      Column(
+                        children: [
+                          Row(
+                            children: [
+                              const Expanded(
+                                child: Text(
+                                  'Datas que funcionam como outro dia\n'
+                                  'da semana no calendário acadêmico.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: AppTheme.textSecondary,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.add_circle,
+                                  color: AppTheme.accentGreen,
+                                ),
+                                tooltip: 'Adicionar troca de dia',
+                                onPressed: () => _pickDaySwapDate(context),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Expanded(
+                            child: sortedSwapKeys.isEmpty
+                                ? const Center(
+                                    child: Text(
+                                      'Nenhuma troca de dia adicionada.',
+                                      style: TextStyle(
+                                        color: AppTheme.textSecondary,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  )
+                                : ListView.builder(
+                                    itemCount: sortedSwapKeys.length,
+                                    itemBuilder: (context, index) {
+                                      final date = sortedSwapKeys[index];
+                                      final effectiveWd = swaps[date]!;
+                                      final realWd = date.weekday;
+                                      return ListTile(
+                                        dense: true,
+                                        leading: const Icon(
+                                          Icons.swap_horiz,
+                                          size: 18,
+                                          color: Colors.amber,
+                                        ),
+                                        title: Text(
+                                          _df.format(date),
+                                          style: const TextStyle(fontSize: 14),
+                                        ),
+                                        subtitle: Text(
+                                          '${_weekdayNames[realWd]} → funciona como ${_weekdayNames[effectiveWd]}',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: AppTheme.textSecondary,
+                                          ),
+                                        ),
+                                        trailing: IconButton(
+                                          icon: const Icon(
+                                            Icons.remove_circle_outline,
+                                            color: AppTheme.danger,
+                                            size: 20,
+                                          ),
+                                          onPressed: () => widget.ctrl
+                                              .removeDaySwapDate(date),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -2404,17 +2606,50 @@ class _HolidayDatesDialogState extends State<_HolidayDatesDialog> {
     );
   }
 
-  Future<void> _pickDate(BuildContext context) async {
+  Future<void> _pickHolidayDate(BuildContext context) async {
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
       initialDate: now,
       firstDate: DateTime(now.year - 2),
       lastDate: DateTime(now.year + 3),
-      helpText: 'Selecione uma data especial',
+      helpText: 'Selecione uma data de feriado',
     );
     if (picked != null) {
       widget.ctrl.addHolidayDate(picked);
+    }
+  }
+
+  Future<void> _pickDaySwapDate(BuildContext context) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: DateTime(now.year - 2),
+      lastDate: DateTime(now.year + 3),
+      helpText: 'Selecione a data que será trocada',
+    );
+    if (picked == null || !mounted) return;
+
+    // Pedir o dia da semana efetivo
+    final weekday = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text(
+          'Qual dia da semana ${_df.format(picked)} vai funcionar como?',
+          style: const TextStyle(fontSize: 15),
+        ),
+        children: List.generate(5, (i) {
+          final wd = i + 1; // 1=Seg..5=Sex
+          return SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, wd),
+            child: Text(_weekdayNames[wd]),
+          );
+        }),
+      ),
+    );
+    if (weekday != null) {
+      widget.ctrl.addDaySwapDate(picked, weekday);
     }
   }
 }

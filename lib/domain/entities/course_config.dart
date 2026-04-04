@@ -11,6 +11,10 @@ class CourseConfig {
   final List<SectionEntry> sections;
   final List<DateTime> holidayDates;
 
+  /// Datas de troca de dia da semana.
+  /// Chave: data (normalizada), Valor: dia da semana efetivo (1=seg..7=dom).
+  final Map<DateTime, int> daySwapDates;
+
   CourseConfig({
     required this.id,
     required this.name,
@@ -21,6 +25,7 @@ class CourseConfig {
     required this.updatedAt,
     this.sections = const [],
     this.holidayDates = const [],
+    this.daySwapDates = const {},
   });
 
   CourseConfig copyWith({
@@ -31,6 +36,7 @@ class CourseConfig {
     DateTime? updatedAt,
     List<SectionEntry>? sections,
     List<DateTime>? holidayDates,
+    Map<DateTime, int>? daySwapDates,
   }) {
     return CourseConfig(
       id: id,
@@ -46,6 +52,7 @@ class CourseConfig {
       updatedAt: updatedAt ?? DateTime.now(),
       sections: sections ?? this.sections,
       holidayDates: holidayDates ?? this.holidayDates,
+      daySwapDates: daySwapDates ?? this.daySwapDates,
     );
   }
 
@@ -59,6 +66,9 @@ class CourseConfig {
     'updatedAt': updatedAt.toIso8601String(),
     'sections': sections.map((s) => s.toJson()).toList(),
     'holidayDates': holidayDates.map((d) => d.toIso8601String()).toList(),
+    'daySwapDates': daySwapDates.map(
+      (k, v) => MapEntry(k.toIso8601String(), v),
+    ),
   };
 
   factory CourseConfig.fromJson(Map<String, dynamic> json) => CourseConfig(
@@ -79,6 +89,11 @@ class CourseConfig {
             ?.map((d) => DateTime.parse(d as String))
             .toList() ??
         [],
+    daySwapDates:
+        (json['daySwapDates'] as Map<String, dynamic>?)?.map(
+          (k, v) => MapEntry(DateTime.parse(k), v as int),
+        ) ??
+        {},
   );
 }
 
@@ -183,6 +198,10 @@ class ActivityEntry {
   /// 0=oculto, 1=visível, 2=disponível mas não mostrar (stealth)
   final int visibility;
 
+  /// Dia da semana esperado para esta atividade (1=segunda..7=domingo).
+  /// null = sem verificação.
+  final int? expectedWeekday;
+
   ActivityEntry({
     required this.id,
     required this.name,
@@ -196,6 +215,7 @@ class ActivityEntry {
     this.moodleModuleId,
     this.moodleModuleName,
     this.visibility = 1,
+    this.expectedWeekday,
   });
 
   /// Calcula a data de abertura a partir da data de referência da seção.
@@ -242,6 +262,7 @@ class ActivityEntry {
     Object? moodleModuleId = _sentinel,
     Object? moodleModuleName = _sentinel,
     int? visibility,
+    Object? expectedWeekday = _sentinel,
   }) {
     return ActivityEntry(
       id: id,
@@ -270,6 +291,9 @@ class ActivityEntry {
           ? this.moodleModuleName
           : moodleModuleName as String?,
       visibility: visibility ?? this.visibility,
+      expectedWeekday: expectedWeekday == _sentinel
+          ? this.expectedWeekday
+          : expectedWeekday as int?,
     );
   }
 
@@ -286,6 +310,7 @@ class ActivityEntry {
     'moodleModuleId': moodleModuleId,
     'moodleModuleName': moodleModuleName,
     'visibility': visibility,
+    'expectedWeekday': expectedWeekday,
   };
 
   factory ActivityEntry.fromJson(Map<String, dynamic> json) => ActivityEntry(
@@ -306,5 +331,6 @@ class ActivityEntry {
     moodleModuleName: json['moodleModuleName'] as String?,
     visibility:
         json['visibility'] as int? ?? (json['visible'] == false ? 0 : 1),
+    expectedWeekday: json['expectedWeekday'] as int?,
   );
 }

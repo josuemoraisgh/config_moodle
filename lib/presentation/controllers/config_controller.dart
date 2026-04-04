@@ -303,6 +303,7 @@ class ConfigController extends ChangeNotifier {
     Object? moodleModuleId = _sentinel,
     Object? moodleModuleName = _sentinel,
     int? visibility,
+    Object? expectedWeekday = _sentinel,
   }) async {
     if (_current == null) return;
     final sections = _current!.sections.map((s) {
@@ -334,6 +335,9 @@ class ConfigController extends ChangeNotifier {
               ? a.moodleModuleName
               : moodleModuleName as String?,
           visibility: visibility,
+          expectedWeekday: expectedWeekday == _sentinel
+              ? a.expectedWeekday
+              : expectedWeekday as int?,
         );
         // Recomputar datas absolutas
         return updated.copyWith(
@@ -664,5 +668,56 @@ class ConfigController extends ChangeNotifier {
       }
     }
     return false;
+  }
+
+  // ── Datas de troca de dia da semana ──────────────────────────────────────
+
+  Map<DateTime, int> get daySwapDates => _current?.daySwapDates ?? {};
+
+  Future<void> addDaySwapDate(DateTime date, int effectiveWeekday) async {
+    if (_current == null) return;
+    final normalized = DateTime(date.year, date.month, date.day);
+    final updated = Map<DateTime, int>.from(_current!.daySwapDates);
+    updated[normalized] = effectiveWeekday;
+    _current = _current!.copyWith(daySwapDates: updated);
+    await _repo.save(_current!);
+    notifyListeners();
+  }
+
+  Future<void> removeDaySwapDate(DateTime date) async {
+    if (_current == null) return;
+    final normalized = DateTime(date.year, date.month, date.day);
+    final updated = Map<DateTime, int>.from(_current!.daySwapDates);
+    updated.remove(normalized);
+    _current = _current!.copyWith(daySwapDates: updated);
+    await _repo.save(_current!);
+    notifyListeners();
+  }
+
+  /// Retorna o dia da semana efetivo de uma data, considerando daySwapDates.
+  int effectiveWeekday(DateTime date) {
+    if (_current == null) return date.weekday;
+    final normalized = DateTime(date.year, date.month, date.day);
+    for (final entry in _current!.daySwapDates.entries) {
+      if (entry.key.year == normalized.year &&
+          entry.key.month == normalized.month &&
+          entry.key.day == normalized.day) {
+        return entry.value;
+      }
+    }
+    return date.weekday;
+  }
+
+  /// Verifica se a data de abertura da atividade cai em dia diferente do esperado.
+  /// Retorna true se há conflito (amarelo).
+  bool activityWeekdayMismatch(
+    ActivityEntry activity,
+    DateTime sectionRefDate,
+  ) {
+    if (activity.expectedWeekday == null) return false;
+    final openDate = activity.computeOpenDate(sectionRefDate);
+    if (openDate == null) return false;
+    final wd = effectiveWeekday(openDate);
+    return wd != activity.expectedWeekday;
   }
 }
