@@ -38,7 +38,22 @@ class ConfigRepositoryImpl implements IConfigRepository {
     String? replaceId,
   }) async {
     final configs = parseSpreadsheet(filePath);
+    return _saveImportedConfigs(configs, replaceId: replaceId);
+  }
 
+  @override
+  Future<CourseConfig> importFromSpreadsheetBytes(
+    Uint8List bytes, {
+    String? replaceId,
+  }) async {
+    final configs = parseSpreadsheetBytes(bytes);
+    return _saveImportedConfigs(configs, replaceId: replaceId);
+  }
+
+  Future<CourseConfig> _saveImportedConfigs(
+    List<CourseConfig> configs, {
+    String? replaceId,
+  }) async {
     if (configs.isEmpty) {
       throw Exception('Nenhuma configuração válida encontrada na planilha.');
     }
@@ -74,6 +89,15 @@ class ConfigRepositoryImpl implements IConfigRepository {
     }
 
     final bytes = File(filePath).readAsBytesSync();
+    return _parseExcelBytes(bytes);
+  }
+
+  @override
+  List<CourseConfig> parseSpreadsheetBytes(Uint8List bytes) {
+    return _parseExcelBytes(bytes);
+  }
+
+  List<CourseConfig> _parseExcelBytes(List<int> bytes) {
     final excel = Excel.decodeBytes(bytes);
     final configs = <CourseConfig>[];
 

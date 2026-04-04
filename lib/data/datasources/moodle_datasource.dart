@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io' as io;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:config_moodle/domain/entities/moodle_entities.dart';
 
@@ -74,7 +75,9 @@ class MoodleDatasource {
       _cookies.containsKey('MoodleSession') && _sesskey != null;
 
   /// Indica se é possível tentar AJAX (sessão ativa OU credenciais para criá-la).
-  bool get _canAttemptAjax => hasAjaxSession || _loginUsername != null;
+  /// No ambiente web, AJAX via HttpClient não é suportado.
+  bool get _canAttemptAjax =>
+      !kIsWeb && (hasAjaxSession || _loginUsername != null);
 
   /// Motivo da falha na sessão AJAX (null se sucesso).
   String? get sessionError => _sessionError;
@@ -128,11 +131,17 @@ class MoodleDatasource {
 
   /// Estabelece sessão web via formulário de login HTML do Moodle.
   /// Gerenciamento 100% manual de cookies — sem depender do cookie jar.
+  /// No ambiente web (Flutter Web), esta operação não é suportada devido a
+  /// restrições de CORS e acesso a cookies.
   Future<void> _establishSession(
     String baseUrl,
     String username,
     String password,
   ) async {
+    if (kIsWeb) {
+      _sessionError = 'Sessão AJAX não suportada no navegador';
+      return;
+    }
     _invalidateSession();
     _sessionError = null;
     _diagInfo = '';

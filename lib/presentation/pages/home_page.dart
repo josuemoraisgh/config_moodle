@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -494,11 +495,66 @@ class _HomePageState extends State<HomePage> {
       type: FileType.custom,
       allowedExtensions: ['xlsx'],
       dialogTitle: 'Selecionar planilha (.xlsx)',
+      withData: kIsWeb, // No web, precisamos dos bytes
     );
-    if (result == null || result.files.single.path == null) return;
+    if (result == null) return;
+
+    final file = result.files.single;
+    final filePath = file.path;
+    final fileBytes = file.bytes;
+
+    // No web, path é null; usamos bytes diretamente
+    if (kIsWeb) {
+      if (fileBytes == null) return;
+      if (!context.mounted) return;
+
+      final ctrl = context.read<ConfigController>();
+      try {
+        final duplicates = ctrl.findDuplicatesFromBytes(fileBytes);
+        if (duplicates.isNotEmpty && context.mounted) {
+          final existing = duplicates.first;
+          final action = await showDialog<String>(
+            context: context,
+            builder: (_) => AlertDialog(
+              title: const Text('Configuração já existe'),
+              content: Text(
+                'Já existe "${existing.name}" salva.\n'
+                'Deseja substituir a existente ou criar uma nova cópia?',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, 'cancel'),
+                  child: const Text('Cancelar'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, 'new'),
+                  child: const Text('Criar nova'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, 'replace'),
+                  child: const Text('Substituir'),
+                ),
+              ],
+            ),
+          );
+          if (action == null || action == 'cancel') return;
+          if (action == 'replace') {
+            await ctrl.importSpreadsheetBytes(
+              fileBytes,
+              replaceId: existing.id,
+            );
+            return;
+          }
+        }
+      } catch (_) {}
+      await ctrl.importSpreadsheetBytes(fileBytes);
+      return;
+    }
+
+    // Desktop: usa filePath
+    if (filePath == null) return;
     if (!context.mounted) return;
 
-    final filePath = result.files.single.path!;
     final ctrl = context.read<ConfigController>();
 
     // Verificar se já existe config com mesmo nome
@@ -558,7 +614,7 @@ class _HomePageState extends State<HomePage> {
     );
     if (result != null && context.mounted) {
       // No desktop, saveFile pode não gravar via bytes; escrever manualmente
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      if (!kIsWeb) {
         File(result).writeAsBytesSync(bytes);
       }
       ScaffoldMessenger.of(context).showSnackBar(
@@ -583,7 +639,7 @@ class _HomePageState extends State<HomePage> {
       );
       if (result != null && context.mounted) {
         // No desktop, saveFile pode não gravar via bytes
-        if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+        if (!kIsWeb) {
           File(result).writeAsBytesSync(uint8Bytes);
         }
         ScaffoldMessenger.of(context).showSnackBar(

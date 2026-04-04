@@ -82,10 +82,35 @@ class ConfigController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> importSpreadsheetBytes(
+    Uint8List bytes, {
+    String? replaceId,
+  }) async {
+    _loading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      await _repo.importFromSpreadsheetBytes(bytes, replaceId: replaceId);
+      await loadAll();
+    } catch (e) {
+      _error = 'Erro ao importar: $e';
+    }
+    _loading = false;
+    notifyListeners();
+  }
+
   /// Retorna configs existentes cujo nome coincide com alguma sheet da planilha.
   List<CourseConfig> findDuplicates(String filePath) {
     final repo = _repo as dynamic;
     final parsed = repo.parseSpreadsheet(filePath) as List<CourseConfig>;
+    if (parsed.isEmpty) return [];
+    final names = parsed.map((c) => c.name.toLowerCase()).toSet();
+    return _configs.where((c) => names.contains(c.name.toLowerCase())).toList();
+  }
+
+  /// Retorna configs existentes cujo nome coincide com alguma sheet (via bytes).
+  List<CourseConfig> findDuplicatesFromBytes(Uint8List bytes) {
+    final parsed = _repo.parseSpreadsheetBytes(bytes);
     if (parsed.isEmpty) return [];
     final names = parsed.map((c) => c.name.toLowerCase()).toSet();
     return _configs.where((c) => names.contains(c.name.toLowerCase())).toList();
@@ -587,5 +612,57 @@ class ConfigController extends ChangeNotifier {
     _current = _current!.copyWith(sections: sections);
     notifyListeners();
     await _repo.save(_current!);
+  }
+
+  // ── Datas de feriado ──────────────────────────────────────────────────────
+
+  List<DateTime> get holidayDates => _current?.holidayDates ?? [];
+
+  Future<void> addHolidayDate(DateTime date) async {
+    if (_current == null) return;
+    final normalized = DateTime(date.year, date.month, date.day);
+    if (_current!.holidayDates.any(
+      (d) =>
+          d.year == normalized.year &&
+          d.month == normalized.month &&
+          d.day == normalized.day,
+    ))
+      return;
+    final updated = [..._current!.holidayDates, normalized]
+      ..sort((a, b) => a.compareTo(b));
+    _current = _current!.copyWith(holidayDates: updated);
+    await _repo.save(_current!);
+    notifyListeners();
+  }
+
+  Future<void> removeHolidayDate(DateTime date) async {
+    if (_current == null) return;
+    final updated = _current!.holidayDates
+        .where(
+          (d) =>
+              !(d.year == date.year &&
+                  d.month == date.month &&
+                  d.day == date.day),
+        )
+        .toList();
+    _current = _current!.copyWith(holidayDates: updated);
+    await _repo.save(_current!);
+    notifyListeners();
+  }
+
+  /// Verifica se o nome resolvido de uma atividade contém alguma data de feriado.
+  bool activityMatchesHoliday(String resolvedName) {
+    if (_current == null || _current!.holidayDates.isEmpty) return false;
+    for (final date in _current!.holidayDates) {
+      final dd = date.day.toString().padLeft(2, '0');
+      final mm = date.month.toString().padLeft(2, '0');
+      final yyyy = date.year.toString();
+      // Busca no formato DD/MM/YYYY ou DD/MM
+      if (resolvedName.contains('$dd/$mm/$yyyy') ||
+          resolvedName.contains('$dd/$mm')) {
+        return true;
+      }
+    }
+    return false;
   }
 }

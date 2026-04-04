@@ -1,39 +1,31 @@
 import 'dart:convert';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:config_moodle/domain/entities/course_config.dart';
 
 class LocalDatasource {
-  static const _fileName = 'config_moodle_data.json';
+  static const _storageKey = 'config_moodle_data';
   Map<String, CourseConfig>? _cache;
-
-  Future<String> get _filePath async {
-    final dir = await getApplicationDocumentsDirectory();
-    return p.join(dir.path, _fileName);
-  }
 
   Future<Map<String, CourseConfig>> _loadAll() async {
     if (_cache != null) return _cache!;
-    final path = await _filePath;
-    final file = File(path);
-    if (!await file.exists()) {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_storageKey);
+    if (raw == null || raw.isEmpty) {
       _cache = {};
       return _cache!;
     }
-    final content = await file.readAsString();
     final Map<String, dynamic> jsonMap =
-        json.decode(content) as Map<String, dynamic>;
-    _cache = jsonMap.map((k, v) =>
-        MapEntry(k, CourseConfig.fromJson(v as Map<String, dynamic>)));
+        json.decode(raw) as Map<String, dynamic>;
+    _cache = jsonMap.map(
+      (k, v) => MapEntry(k, CourseConfig.fromJson(v as Map<String, dynamic>)),
+    );
     return _cache!;
   }
 
   Future<void> _saveAll() async {
-    final path = await _filePath;
-    final file = File(path);
+    final prefs = await SharedPreferences.getInstance();
     final jsonMap = _cache!.map((k, v) => MapEntry(k, v.toJson()));
-    await file.writeAsString(json.encode(jsonMap));
+    await prefs.setString(_storageKey, json.encode(jsonMap));
   }
 
   Future<List<CourseConfig>> getAll() async {

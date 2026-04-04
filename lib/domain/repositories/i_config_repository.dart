@@ -6,7 +6,14 @@ abstract class IConfigRepository {
   Future<CourseConfig?> getById(String id);
   Future<void> save(CourseConfig config);
   Future<void> delete(String id);
-  Future<CourseConfig> importFromSpreadsheet(String filePath,
-      {String? replaceId});
+  Future<CourseConfig> importFromSpreadsheet(
+    String filePath, {
+    String? replaceId,
+  });
+  Future<CourseConfig> importFromSpreadsheetBytes(
+    Uint8List bytes, {
+    String? replaceId,
+  });
   Future<Uint8List> exportToSpreadsheetBytes(String courseConfigId);
+  List<CourseConfig> parseSpreadsheetBytes(Uint8List bytes);
 }

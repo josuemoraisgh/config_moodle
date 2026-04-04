@@ -9,6 +9,7 @@ class CourseConfig {
   final DateTime createdAt;
   final DateTime updatedAt;
   final List<SectionEntry> sections;
+  final List<DateTime> holidayDates;
 
   CourseConfig({
     required this.id,
@@ -19,6 +20,7 @@ class CourseConfig {
     required this.createdAt,
     required this.updatedAt,
     this.sections = const [],
+    this.holidayDates = const [],
   });
 
   CourseConfig copyWith({
@@ -28,6 +30,7 @@ class CourseConfig {
     DateTime? semesterStartDate,
     DateTime? updatedAt,
     List<SectionEntry>? sections,
+    List<DateTime>? holidayDates,
   }) {
     return CourseConfig(
       id: id,
@@ -42,6 +45,7 @@ class CourseConfig {
       createdAt: createdAt,
       updatedAt: updatedAt ?? DateTime.now(),
       sections: sections ?? this.sections,
+      holidayDates: holidayDates ?? this.holidayDates,
     );
   }
 
@@ -54,6 +58,7 @@ class CourseConfig {
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
     'sections': sections.map((s) => s.toJson()).toList(),
+    'holidayDates': holidayDates.map((d) => d.toIso8601String()).toList(),
   };
 
   factory CourseConfig.fromJson(Map<String, dynamic> json) => CourseConfig(
@@ -67,6 +72,11 @@ class CourseConfig {
     sections:
         (json['sections'] as List?)
             ?.map((s) => SectionEntry.fromJson(s as Map<String, dynamic>))
+            .toList() ??
+        [],
+    holidayDates:
+        (json['holidayDates'] as List?)
+            ?.map((d) => DateTime.parse(d as String))
             .toList() ??
         [],
   );

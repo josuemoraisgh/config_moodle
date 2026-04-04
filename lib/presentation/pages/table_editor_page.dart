@@ -290,6 +290,21 @@ class _TableEditorPageState extends State<TableEditorPage> {
               ),
               const SizedBox(width: 4),
               Tooltip(
+                message: 'Datas Especiais',
+                child: GradientButton(
+                  icon: Icons.event_busy,
+                  label: '',
+                  compact: true,
+                  gradient: LinearGradient(
+                    colors: ctrl.holidayDates.isEmpty
+                        ? [const Color(0xFF78909C), const Color(0xFF546E7A)]
+                        : [const Color(0xFFFF7043), const Color(0xFFE64A19)],
+                  ),
+                  onPressed: () => _showHolidayDatesDialog(context, ctrl),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Tooltip(
                 message: 'Avaliar',
                 child: GradientButton(
                   icon: Icons.fact_check_outlined,
@@ -1193,6 +1208,16 @@ class _TableEditorPageState extends State<TableEditorPage> {
     final isSelected = ctrl.selectedActivityIds.contains(activity.id);
     final hasSelection = ctrl.hasSelection;
 
+    // Resolver o nome da atividade para verificar datas de feriado
+    final resolvedName = MacroResolver.resolve(
+      activity.name,
+      sectionRefDate,
+      null,
+      activity.computeOpenDate(sectionRefDate),
+      activity.computeCloseDate(sectionRefDate),
+    );
+    final isHoliday = ctrl.activityMatchesHoliday(resolvedName);
+
     // During multi-drag, hide all selected items (they appear in the feedback)
     if (_isDraggingSelection && isSelected) {
       return SizedBox(key: ValueKey(activity.id));
@@ -1205,8 +1230,14 @@ class _TableEditorPageState extends State<TableEditorPage> {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: AppTheme.accent.withAlpha(100)),
             )
+          : isHoliday
+          ? BoxDecoration(
+              color: AppTheme.danger.withAlpha(40),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.danger.withAlpha(80)),
+            )
           : null,
-      padding: isSelected
+      padding: (isSelected || isHoliday)
           ? const EdgeInsets.symmetric(horizontal: 4, vertical: 2)
           : null,
       child: Row(
@@ -2275,5 +2306,115 @@ class _TableEditorPageState extends State<TableEditorPage> {
         ],
       ),
     );
+  }
+
+  void _showHolidayDatesDialog(BuildContext context, ConfigController ctrl) {
+    showDialog(
+      context: context,
+      builder: (_) => _HolidayDatesDialog(ctrl: ctrl),
+    );
+  }
+}
+
+class _HolidayDatesDialog extends StatefulWidget {
+  final ConfigController ctrl;
+  const _HolidayDatesDialog({required this.ctrl});
+
+  @override
+  State<_HolidayDatesDialog> createState() => _HolidayDatesDialogState();
+}
+
+class _HolidayDatesDialogState extends State<_HolidayDatesDialog> {
+  final _df = DateFormat('dd/MM/yyyy');
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.ctrl,
+      builder: (context, _) {
+        final dates = widget.ctrl.holidayDates;
+        return AlertDialog(
+          title: Row(
+            children: [
+              const Icon(Icons.event_busy, color: AppTheme.danger),
+              const SizedBox(width: 8),
+              const Text('Datas Especiais'),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.add_circle, color: AppTheme.accentGreen),
+                tooltip: 'Adicionar data',
+                onPressed: () => _pickDate(context),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 360,
+            child: dates.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Text(
+                        'Nenhuma data especial adicionada.\n'
+                        'Atividades com essas datas no nome\n'
+                        'serão destacadas em vermelho.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: dates.length,
+                    itemBuilder: (context, index) {
+                      final date = dates[index];
+                      return ListTile(
+                        dense: true,
+                        leading: const Icon(
+                          Icons.calendar_today,
+                          size: 18,
+                          color: AppTheme.danger,
+                        ),
+                        title: Text(
+                          _df.format(date),
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                        trailing: IconButton(
+                          icon: const Icon(
+                            Icons.remove_circle_outline,
+                            color: AppTheme.danger,
+                            size: 20,
+                          ),
+                          onPressed: () => widget.ctrl.removeHolidayDate(date),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Fechar'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _pickDate(BuildContext context) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: DateTime(now.year - 2),
+      lastDate: DateTime(now.year + 3),
+      helpText: 'Selecione uma data especial',
+    );
+    if (picked != null) {
+      widget.ctrl.addHolidayDate(picked);
+    }
   }
 }
