@@ -71,9 +71,9 @@ class _HomePageState extends State<HomePage> {
                         subtitle:
                             'Importe uma planilha ou crie uma nova configuração para começar.',
                         action: GradientButton(
-                          label: 'Importar Planilha',
-                          icon: Icons.upload_file,
-                          onPressed: () => _importSpreadsheet(context),
+                          label: 'Começar',
+                          icon: Icons.add,
+                          onPressed: () => _showAddMenu(context),
                         ),
                       )
                     : _buildGrid(context, configCtrl, df),
