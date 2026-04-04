@@ -748,10 +748,6 @@ class SyncController extends ChangeNotifier {
         orderIndex++;
         final activities = <ActivityEntry>[];
 
-        // Encontrar a menor data de abertura dos módulos para estimar
-        // o referenceDaysOffset da seção
-        DateTime? earliestOpen;
-
         for (final mod in mSection.modules) {
           // Pular labels (áreas de texto) se não tiver nome
           if (mod.name.isEmpty) continue;
@@ -768,12 +764,6 @@ class SyncController extends ChangeNotifier {
             }
           }
 
-          if (openDate != null) {
-            if (earliestOpen == null || openDate.isBefore(earliestOpen)) {
-              earliestOpen = openDate;
-            }
-          }
-
           activities.add(
             ActivityEntry(
               id: uuid.v4(),
@@ -787,20 +777,8 @@ class SyncController extends ChangeNotifier {
           );
         }
 
-        // Calcular referenceDaysOffset: usar a menor data de abertura
-        // como referência da seção (7 dias alinhados se possível)
-        final int sectionOffset;
-        if (earliestOpen != null) {
-          final openDay = DateTime(
-            earliestOpen.year,
-            earliestOpen.month,
-            earliestOpen.day,
-          );
-          sectionOffset = openDay.difference(semesterStartDay).inDays;
-        } else {
-          // Sem datas: estimar offset pela ordem (7 dias por seção)
-          sectionOffset = (orderIndex - 1) * 7;
-        }
+        // As duas primeiras seções têm offset 0, as demais avançam +7 dias cada
+        final int sectionOffset = orderIndex <= 2 ? 0 : (orderIndex - 2) * 7;
 
         final sectionRefDate = semesterStartDay.add(
           Duration(days: sectionOffset),
@@ -822,6 +800,9 @@ class SyncController extends ChangeNotifier {
             openOffsetDays = openDay.difference(sectionRefDate).inDays;
             openTimeMinutes =
                 activity.openDate!.hour * 60 + activity.openDate!.minute;
+          } else {
+            // Sem data de abertura: usar offset 0 (data da seção)
+            openOffsetDays = 0;
           }
 
           if (activity.closeDate != null) {
