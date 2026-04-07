@@ -517,51 +517,131 @@ class SyncController extends ChangeNotifier {
       }
 
       // ── Atualizar datas de abertura/encerramento das atividades ──
+      // Sempre envia para atividades com offsets configurados (forçar push).
+      // Após envio, re-busca dados do Moodle para verificar se aplicou.
+      _syncLog += '\n── Datas seção "${match.local.name}" ──\n';
+      final datePushList =
+          <
+            ({
+              int cmid,
+              String modname,
+              String actName,
+              DateTime? openDate,
+              DateTime? closeDate,
+            })
+          >[];
+
       for (final am in match.activityMatches) {
         if (am.moodleModule == null) continue;
 
         final localOpenDate = am.local.computeOpenDate(sectionRefDate);
         final localCloseDate = am.local.computeCloseDate(sectionRefDate);
 
-        // Verificar se as datas locais diferem das datas do Moodle
-        DateTime? moodleOpenDate;
-        DateTime? moodleCloseDate;
-        for (final d in am.moodleModule!.dates) {
-          if (d.timestamp <= 0) continue;
-          if (d.isOpenDate) {
-            moodleOpenDate = d.dateTime;
-          } else if (d.isCloseDate) {
-            moodleCloseDate ??= d.dateTime;
-          }
+        final actName = am.local.name.length > 25
+            ? am.local.name.substring(0, 25)
+            : am.local.name;
+
+        // Pular atividades que não têm nenhum offset configurado
+        final hasOpenOffset = am.local.openOffsetDays != null;
+        final hasCloseOffset = am.local.closeOffsetDays != null;
+
+        _syncLog +=
+            '  "$actName" modname=${am.moodleModule!.modname} '
+            'openOffset=${am.local.openOffsetDays} closeOffset=${am.local.closeOffsetDays} '
+            'openTime=${am.local.openTimeMinutes} closeTime=${am.local.closeTimeMinutes}\n'
+            '    local:  open=$localOpenDate close=$localCloseDate\n';
+
+        if (!hasOpenOffset && !hasCloseOffset) {
+          _syncLog += '    (sem offsets configurados – pulando)\n';
+          continue;
         }
 
-        final openChanged = _datesDiffer(localOpenDate, moodleOpenDate);
-        final closeChanged = _datesDiffer(localCloseDate, moodleCloseDate);
+        datePushList.add((
+          cmid: am.moodleModule!.id,
+          modname: am.moodleModule!.modname,
+          actName: actName,
+          openDate: localOpenDate,
+          closeDate: localCloseDate,
+        ));
+      }
 
-        if (openChanged || closeChanged) {
-          final resolvedName = MacroResolver.resolve(
-            am.local.name,
-            config.semesterStartDate,
-            sectionRefDate,
-            localOpenDate,
-            localCloseDate,
+      // Enviar atualizações de data FORÇADAS para todas as atividades com offsets
+      for (final dp in datePushList) {
+        final resolvedName = dp.actName;
+        _progressMessage = 'Datas: $resolvedName';
+        notifyListeners();
+        try {
+          final result = await _repo.updateModuleDates(
+            token,
+            baseUrl,
+            dp.cmid,
+            dp.modname,
+            dp.openDate,
+            dp.closeDate,
           );
-          _progressMessage = 'Datas: $resolvedName';
-          notifyListeners();
-          try {
-            await _repo.updateModuleDates(
-              token,
-              baseUrl,
-              am.moodleModule!.id,
-              am.moodleModule!.modname,
-              localOpenDate,
-              localCloseDate,
-            );
-          } catch (e) {
-            if (!_isAccessError(e)) {
-              errors.add('Datas "${am.local.name}": $e');
+          _syncLog += '    ✓ ENVIADO (cmid=${dp.cmid}): $result\n';
+        } catch (e) {
+          _syncLog += '    ✗ ERRO datas (cmid=${dp.cmid}): $e\n';
+          if (!_isAccessError(e)) {
+            errors.add('Datas "${dp.actName}": $e');
+          }
+        }
+      }
+
+      // Verificação pós-envio: re-buscar datas do Moodle e comparar
+      if (datePushList.isNotEmpty) {
+        _progressMessage = 'Verificando datas...';
+        notifyListeners();
+        try {
+          final freshSections = await _repo.getCourseContents(
+            token,
+            baseUrl,
+            config.moodleCourseId!,
+          );
+          // Encontrar a seção correspondente
+          final freshSection = freshSections
+              .where((s) => s.id == match.moodleSection!.id)
+              .firstOrNull;
+          if (freshSection != null) {
+            _syncLog += '  ── Verificação pós-envio ──\n';
+            for (final dp in datePushList) {
+              final freshMod = freshSection.modules
+                  .where((m) => m.id == dp.cmid)
+                  .firstOrNull;
+              if (freshMod == null) {
+                _syncLog +=
+                    '    ⚠ cmid=${dp.cmid} não encontrado na re-busca\n';
+                continue;
+              }
+              DateTime? freshOpen;
+              DateTime? freshClose;
+              for (final d in freshMod.dates) {
+                if (d.timestamp <= 0) continue;
+                if (d.isOpenDate) {
+                  freshOpen = d.dateTime;
+                } else if (d.isCloseDate) {
+                  freshClose ??= d.dateTime;
+                }
+              }
+              final openOk = !_datesDiffer(dp.openDate, freshOpen);
+              final closeOk = !_datesDiffer(dp.closeDate, freshClose);
+              if (openOk && closeOk) {
+                _syncLog +=
+                    '    ✓ VERIFICADO cmid=${dp.cmid}: '
+                    'open=$freshOpen close=$freshClose\n';
+              } else {
+                _syncLog +=
+                    '    ✗ DIVERGÊNCIA cmid=${dp.cmid}: '
+                    'esperado open=${dp.openDate} close=${dp.closeDate} | '
+                    'moodle open=$freshOpen close=$freshClose\n';
+                errors.add(
+                  'Verificação "${dp.actName}": datas não aplicadas no Moodle',
+                );
+              }
             }
           }
+        } catch (e) {
+          _syncLog += '  ⚠ Erro na verificação pós-envio: $e\n';
         }
       }
 

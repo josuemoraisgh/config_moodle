@@ -48,7 +48,7 @@ abstract class IMoodleRepository {
     int? targetCmId,
     int targetSectionId,
   );
-  Future<void> updateModuleDates(
+  Future<String> updateModuleDates(
     String token,
     String baseUrl,
     int cmid,

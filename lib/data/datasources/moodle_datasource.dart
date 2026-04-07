@@ -776,7 +776,8 @@ class MoodleDatasource {
   /// Atualiza datas de abertura e/ou encerramento de um módulo via
   /// formulário modedit.php. Faz scraping completo do formulário para
   /// preservar TODOS os campos existentes e modifica apenas as datas.
-  Future<void> updateModuleDates(
+  /// Retorna descrição do resultado (sucesso ou detalhes do erro).
+  Future<String> updateModuleDates(
     String baseUrl,
     int cmid,
     String modname,
@@ -785,7 +786,9 @@ class MoodleDatasource {
   ) async {
     final openField = _openDateFieldNames[modname];
     final closeField = _closeDateFieldNames[modname];
-    if (openField == null && closeField == null) return; // tipo sem datas
+    if (openField == null && closeField == null) {
+      return 'modname "$modname" não suportado para datas';
+    }
 
     if (!hasAjaxSession && _loginUsername != null) {
       await _establishSession(baseUrl, _loginUsername!, _loginPassword!);
@@ -807,27 +810,57 @@ class MoodleDatasource {
       final html = await getResp.transform(utf8.decoder).join();
 
       if (getResp.statusCode != 200) {
-        throw MoodleException('Formulário HTTP ${getResp.statusCode}');
+        throw MoodleException('GET formulário HTTP ${getResp.statusCode}');
+      }
+
+      // Verificar se a página é realmente o formulário de edição
+      if (!html.contains('modedit.php') && !html.contains('moodleform')) {
+        // Pode ser redirecionamento para login
+        if (html.contains('login/index.php') || html.contains('logintoken')) {
+          _invalidateSession('Sessão expirada ao acessar formulário');
+          throw MoodleException('Sessão expirada – precisa relogar');
+        }
+        throw MoodleException(
+          'Página retornada não é formulário de edição (cmid=$cmid)',
+        );
       }
 
       // 2. Extrair TODOS os campos do formulário (moodleform)
       final fields = _parseAllFormFields(html);
 
+      if (fields.isEmpty) {
+        throw MoodleException(
+          'Nenhum campo encontrado no formulário (cmid=$cmid)',
+        );
+      }
+
       // Garantir sesskey
       fields['sesskey'] = _sesskey!;
+
+      // Registro dos valores antes da alteração para log
+      final logParts = <String>[];
 
       // 3. Atualizar campos de data
       if (openField != null && openDate != null) {
         _setDateFields(fields, openField, openDate);
+        logParts.add(
+          'open=$openField → ${openDate.day}/${openDate.month}/${openDate.year} '
+          '${openDate.hour}:${openDate.minute.toString().padLeft(2, "0")}',
+        );
       } else if (openField != null && openDate == null) {
-        // Desabilitar data de abertura
         fields.remove('$openField[enabled]');
+        logParts.add('open=$openField → desabilitado');
       }
 
       if (closeField != null && closeDate != null) {
         _setDateFields(fields, closeField, closeDate);
+        logParts.add(
+          'close=$closeField → ${closeDate.day}/${closeDate.month}/${closeDate.year} '
+          '${closeDate.hour}:${closeDate.minute.toString().padLeft(2, "0")}',
+        );
       } else if (closeField != null && closeDate == null) {
         fields.remove('$closeField[enabled]');
+        logParts.add('close=$closeField → desabilitado');
       }
 
       // Botão de submissão
@@ -854,14 +887,71 @@ class MoodleDatasource {
 
       final postResp = await postReq.close();
       _storeCookies(postResp);
-      await postResp.drain<void>();
 
       if (postResp.statusCode == 302 || postResp.statusCode == 303) {
-        return;
+        // Redirect = sucesso no Moodle. Seguir redirect para confirmar.
+        final location = postResp.headers.value('location');
+        await postResp.drain<void>();
+
+        if (location != null) {
+          // Verificar se redireciona para a página do curso (sucesso)
+          // e não para o próprio formulário (erro de validação)
+          if (location.contains('modedit.php')) {
+            // Redireciona de volta para o formulário → possível erro
+            final verifyReq = await client.getUrl(
+              Uri.parse(
+                location.startsWith('http') ? location : '$baseUrl$location',
+              ),
+            );
+            _applyCookies(verifyReq);
+            final verifyResp = await verifyReq.close();
+            _storeCookies(verifyResp);
+            final verifyHtml = await verifyResp.transform(utf8.decoder).join();
+
+            // Verificar se há mensagens de erro no formulário
+            if (verifyHtml.contains('class="error"') ||
+                verifyHtml.contains('alert-danger') ||
+                verifyHtml.contains('notifyproblem')) {
+              final errorMatch = RegExp(
+                r'class="error"[^>]*>([^<]+)<',
+              ).firstMatch(verifyHtml);
+              final errorMsg = errorMatch?.group(1) ?? 'erro de validação';
+              throw MoodleException('Moodle rejeitou: $errorMsg (cmid=$cmid)');
+            }
+          }
+        }
+        return 'OK [${logParts.join("; ")}] → redirect ${postResp.statusCode}';
+      }
+
+      // POST não redirecionou — ler corpo para identificar erros
+      final postBody = await postResp.transform(utf8.decoder).join();
+
+      // Verificar mensagens de erro do Moodle
+      if (postBody.contains('class="error"') ||
+          postBody.contains('alert-danger') ||
+          postBody.contains('notifyproblem') ||
+          postBody.contains('loginerrors')) {
+        final errorMatch = RegExp(
+          r'(?:class="error"|alert-danger|notifyproblem)[^>]*>([^<]{1,200})',
+        ).firstMatch(postBody);
+        final errorMsg = errorMatch?.group(1)?.trim() ?? 'erro desconhecido';
+        throw MoodleException(
+          'Moodle erro: $errorMsg (HTTP ${postResp.statusCode}, cmid=$cmid)',
+        );
+      }
+
+      // Sessão expirada?
+      if (postBody.contains('login/index.php') ||
+          postBody.contains('logintoken')) {
+        _invalidateSession('Sessão expirada ao salvar formulário');
+        throw MoodleException(
+          'Sessão expirada ao salvar (HTTP ${postResp.statusCode})',
+        );
       }
 
       throw MoodleException(
-        'Formulário de datas não salvou (HTTP ${postResp.statusCode})',
+        'Formulário não salvou (HTTP ${postResp.statusCode}, '
+        '${postBody.length} bytes, cmid=$cmid)',
       );
     } finally {
       client.close();

@@ -134,7 +134,7 @@ class MoodleRepositoryImpl implements IMoodleRepository {
   }
 
   @override
-  Future<void> updateModuleDates(
+  Future<String> updateModuleDates(
     String token,
     String baseUrl,
     int cmid,
