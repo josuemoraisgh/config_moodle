@@ -749,6 +749,242 @@ class MoodleDatasource {
         .replaceAll('&#39;', "'");
   }
 
+  // ── Mapeamento modname → campos de data do modedit.php ─────────────────
+
+  static const _openDateFieldNames = <String, String>{
+    'assign': 'allowsubmissionsfromdate',
+    'quiz': 'timeopen',
+    'choice': 'timeopen',
+    'feedback': 'timeopen',
+    'lesson': 'available',
+    'data': 'timeavailablefrom',
+    'workshop': 'submissionstart',
+    'scorm': 'timeopen',
+  };
+
+  static const _closeDateFieldNames = <String, String>{
+    'assign': 'duedate',
+    'quiz': 'timeclose',
+    'choice': 'timeclose',
+    'feedback': 'timeclose',
+    'lesson': 'deadline',
+    'data': 'timeavailableto',
+    'workshop': 'submissionend',
+    'scorm': 'timeclose',
+  };
+
+  /// Atualiza datas de abertura e/ou encerramento de um módulo via
+  /// formulário modedit.php. Faz scraping completo do formulário para
+  /// preservar TODOS os campos existentes e modifica apenas as datas.
+  Future<void> updateModuleDates(
+    String baseUrl,
+    int cmid,
+    String modname,
+    DateTime? openDate,
+    DateTime? closeDate,
+  ) async {
+    final openField = _openDateFieldNames[modname];
+    final closeField = _closeDateFieldNames[modname];
+    if (openField == null && closeField == null) return; // tipo sem datas
+
+    if (!hasAjaxSession && _loginUsername != null) {
+      await _establishSession(baseUrl, _loginUsername!, _loginPassword!);
+    }
+    if (!hasAjaxSession) {
+      throw MoodleException('Sessão necessária para edição de datas');
+    }
+
+    final client = io.HttpClient();
+    client.badCertificateCallback = (cert, host, port) => true;
+    try {
+      // 1. GET página do formulário de edição
+      final getReq = await client.getUrl(
+        Uri.parse('$baseUrl/course/modedit.php?update=$cmid'),
+      );
+      _applyCookies(getReq);
+      final getResp = await getReq.close();
+      _storeCookies(getResp);
+      final html = await getResp.transform(utf8.decoder).join();
+
+      if (getResp.statusCode != 200) {
+        throw MoodleException('Formulário HTTP ${getResp.statusCode}');
+      }
+
+      // 2. Extrair TODOS os campos do formulário (moodleform)
+      final fields = _parseAllFormFields(html);
+
+      // Garantir sesskey
+      fields['sesskey'] = _sesskey!;
+
+      // 3. Atualizar campos de data
+      if (openField != null && openDate != null) {
+        _setDateFields(fields, openField, openDate);
+      } else if (openField != null && openDate == null) {
+        // Desabilitar data de abertura
+        fields.remove('$openField[enabled]');
+      }
+
+      if (closeField != null && closeDate != null) {
+        _setDateFields(fields, closeField, closeDate);
+      } else if (closeField != null && closeDate == null) {
+        fields.remove('$closeField[enabled]');
+      }
+
+      // Botão de submissão
+      fields['submitbutton2'] = 'Salvar e voltar ao curso';
+      fields.remove('cancel');
+
+      // 4. POST do formulário
+      final postReq = await client.postUrl(
+        Uri.parse('$baseUrl/course/modedit.php'),
+      );
+      postReq.followRedirects = false;
+      _applyCookies(postReq);
+      postReq.headers.contentType = io.ContentType(
+        'application',
+        'x-www-form-urlencoded',
+        charset: 'utf-8',
+      );
+
+      final bodyParts = <String>[];
+      fields.forEach((k, v) {
+        bodyParts.add('${Uri.encodeComponent(k)}=${Uri.encodeComponent(v)}');
+      });
+      postReq.write(bodyParts.join('&'));
+
+      final postResp = await postReq.close();
+      _storeCookies(postResp);
+      await postResp.drain<void>();
+
+      if (postResp.statusCode == 302 || postResp.statusCode == 303) {
+        return;
+      }
+
+      throw MoodleException(
+        'Formulário de datas não salvou (HTTP ${postResp.statusCode})',
+      );
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Define os sub-campos de data do Moodle (day/month/year/hour/minute/enabled).
+  void _setDateFields(
+    Map<String, String> fields,
+    String fieldName,
+    DateTime date,
+  ) {
+    fields['$fieldName[enabled]'] = '1';
+    fields['$fieldName[day]'] = date.day.toString();
+    fields['$fieldName[month]'] = date.month.toString();
+    fields['$fieldName[year]'] = date.year.toString();
+    fields['$fieldName[hour]'] = date.hour.toString();
+    fields['$fieldName[minute]'] = date.minute.toString();
+  }
+
+  /// Extrai TODOS os campos de um formulário Moodle (moodleform) do HTML.
+  /// Captura: hidden inputs, text inputs, number inputs, selects (valor
+  /// selecionado), checkboxes marcados, radio buttons selecionados e
+  /// textareas.
+  Map<String, String> _parseAllFormFields(String html) {
+    final fields = <String, String>{};
+
+    // ── Inputs (hidden, text, number, email, submit, etc.) ──
+    for (final m in RegExp(
+      r'<input\b[^>]*>',
+      caseSensitive: false,
+    ).allMatches(html)) {
+      final tag = m.group(0)!;
+      final type =
+          RegExp(
+            r'''type=["']([^"']*)["']''',
+          ).firstMatch(tag)?.group(1)?.toLowerCase() ??
+          'text';
+
+      final name = RegExp(
+        r'''name=["']([^"']*)["']''',
+      ).firstMatch(tag)?.group(1);
+      if (name == null || name.isEmpty) continue;
+
+      final value =
+          RegExp(r'''value=["']([^"']*)["']''').firstMatch(tag)?.group(1) ?? '';
+
+      if (type == 'checkbox') {
+        if (RegExp(r'\bchecked\b', caseSensitive: false).hasMatch(tag)) {
+          fields[name] = _decodeHtmlEntities(value.isEmpty ? '1' : value);
+        }
+      } else if (type == 'radio') {
+        if (RegExp(r'\bchecked\b', caseSensitive: false).hasMatch(tag)) {
+          fields[name] = _decodeHtmlEntities(value);
+        }
+      } else if (type != 'submit' && type != 'button' && type != 'reset') {
+        fields[name] = _decodeHtmlEntities(value);
+      }
+    }
+
+    // ── Selects (capturar option selected) ──
+    for (final m in RegExp(
+      r'<select\b[^>]*name=["'
+      "'"
+      r']([^"'
+      "'"
+      r']*)["'
+      "'"
+      r'][^>]*>(.*?)</select>',
+      caseSensitive: false,
+      dotAll: true,
+    ).allMatches(html)) {
+      final name = m.group(1)!;
+      final options = m.group(2)!;
+      // Procurar option com selected
+      final selMatch = RegExp(
+        r'<option\b[^>]*selected[^>]*value=["'
+        "'"
+        r']([^"'
+        "'"
+        r']*)["'
+        "'"
+        r']',
+        caseSensitive: false,
+      ).firstMatch(options);
+      // Formato alternativo: value antes de selected
+      final selMatch2 =
+          selMatch ??
+          RegExp(
+            r'<option\b[^>]*value=["'
+            "'"
+            r']([^"'
+            "'"
+            r']*)["'
+            "'"
+            r'][^>]*selected',
+            caseSensitive: false,
+          ).firstMatch(options);
+      if (selMatch2 != null) {
+        fields[name] = _decodeHtmlEntities(selMatch2.group(1)!);
+      }
+    }
+
+    // ── Textareas ──
+    for (final m in RegExp(
+      r'<textarea\b[^>]*name=["'
+      "'"
+      r']([^"'
+      "'"
+      r']*)["'
+      "'"
+      r'][^>]*>(.*?)</textarea>',
+      caseSensitive: false,
+      dotAll: true,
+    ).allMatches(html)) {
+      final name = m.group(1)!;
+      final content = m.group(2)!;
+      fields[name] = _decodeHtmlEntities(content);
+    }
+
+    return fields;
+  }
+
   /// Move um módulo para depois de outro módulo na mesma seção.
   /// Usa core_courseformat_update_course com action=cm_move.
   /// Se [targetCmId] for null, move para o início da seção [targetSectionId].

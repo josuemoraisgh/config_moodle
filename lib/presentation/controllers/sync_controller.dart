@@ -516,6 +516,55 @@ class SyncController extends ChangeNotifier {
         }
       }
 
+      // ── Atualizar datas de abertura/encerramento das atividades ──
+      for (final am in match.activityMatches) {
+        if (am.moodleModule == null) continue;
+
+        final localOpenDate = am.local.computeOpenDate(sectionRefDate);
+        final localCloseDate = am.local.computeCloseDate(sectionRefDate);
+
+        // Verificar se as datas locais diferem das datas do Moodle
+        DateTime? moodleOpenDate;
+        DateTime? moodleCloseDate;
+        for (final d in am.moodleModule!.dates) {
+          if (d.timestamp <= 0) continue;
+          if (d.isOpenDate) {
+            moodleOpenDate = d.dateTime;
+          } else if (d.isCloseDate) {
+            moodleCloseDate ??= d.dateTime;
+          }
+        }
+
+        final openChanged = _datesDiffer(localOpenDate, moodleOpenDate);
+        final closeChanged = _datesDiffer(localCloseDate, moodleCloseDate);
+
+        if (openChanged || closeChanged) {
+          final resolvedName = MacroResolver.resolve(
+            am.local.name,
+            config.semesterStartDate,
+            sectionRefDate,
+            localOpenDate,
+            localCloseDate,
+          );
+          _progressMessage = 'Datas: $resolvedName';
+          notifyListeners();
+          try {
+            await _repo.updateModuleDates(
+              token,
+              baseUrl,
+              am.moodleModule!.id,
+              am.moodleModule!.modname,
+              localOpenDate,
+              localCloseDate,
+            );
+          } catch (e) {
+            if (!_isAccessError(e)) {
+              errors.add('Datas "${am.local.name}": $e');
+            }
+          }
+        }
+      }
+
       // ── Reordenar atividades dentro da seção ──
       // Comparar a ordem desejada (local) com a ordem atual (Moodle)
       // e mover atividades que estejam fora de posição.
@@ -665,6 +714,13 @@ class SyncController extends ChangeNotifier {
       if (a[i] != b[i]) return false;
     }
     return true;
+  }
+
+  /// Compara duas datas (com tolerância de 60s) para detectar diferenças.
+  bool _datesDiffer(DateTime? a, DateTime? b) {
+    if (a == null && b == null) return false;
+    if (a == null || b == null) return true;
+    return a.difference(b).inSeconds.abs() > 60;
   }
 
   void clearMatches() {

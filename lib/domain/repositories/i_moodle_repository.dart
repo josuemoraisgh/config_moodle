@@ -48,4 +48,12 @@ abstract class IMoodleRepository {
     int? targetCmId,
     int targetSectionId,
   );
+  Future<void> updateModuleDates(
+    String token,
+    String baseUrl,
+    int cmid,
+    String modname,
+    DateTime? openDate,
+    DateTime? closeDate,
+  );
 }

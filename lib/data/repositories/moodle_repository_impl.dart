@@ -132,4 +132,22 @@ class MoodleRepositoryImpl implements IMoodleRepository {
       targetSectionId,
     );
   }
+
+  @override
+  Future<void> updateModuleDates(
+    String token,
+    String baseUrl,
+    int cmid,
+    String modname,
+    DateTime? openDate,
+    DateTime? closeDate,
+  ) async {
+    return _datasource.updateModuleDates(
+      baseUrl,
+      cmid,
+      modname,
+      openDate,
+      closeDate,
+    );
+  }
 }
