@@ -39,6 +39,7 @@ class _TableEditorPageState extends State<TableEditorPage> {
   String? _hoveringActivityId;
   bool _evaluated = false;
   bool _evaluating = false;
+  bool _fabOpen = false;
 
   // Auto-scroll during drag
   bool _autoScrolling = false;
@@ -242,11 +243,100 @@ class _TableEditorPageState extends State<TableEditorPage> {
               onPressed: () => ctrl.clearSelection(),
             )
           : config?.sections.isNotEmpty == true
-          ? FloatingActionButton(
-              onPressed: () => _showAddSectionDialog(context, ctrl),
-              child: const Icon(Icons.add),
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // Opções expandidas
+                if (_fabOpen) ...[
+                  _buildFabOption(
+                    heroTag: 'add_activity',
+                    icon: Icons.post_add,
+                    label: 'Adicionar Atividade',
+                    color: AppTheme.accent,
+                    onPressed: () {
+                      setState(() => _fabOpen = false);
+                      final firstSection = config!.sections.first;
+                      final sectionRefDate = config.semesterStartDate.add(
+                        Duration(days: firstSection.referenceDaysOffset),
+                      );
+                      _showAddActivityDialog(
+                        context,
+                        firstSection.id,
+                        ctrl,
+                        sectionRefDate,
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  _buildFabOption(
+                    heroTag: 'add_section',
+                    icon: Icons.playlist_add,
+                    label: 'Adicionar Seção',
+                    color: AppTheme.accentGreen,
+                    onPressed: () {
+                      setState(() => _fabOpen = false);
+                      _showAddSectionDialog(context, ctrl);
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                // Botão principal
+                FloatingActionButton(
+                  heroTag: 'fab_main',
+                  onPressed: () => setState(() => _fabOpen = !_fabOpen),
+                  child: AnimatedRotation(
+                    turns: _fabOpen ? 0.125 : 0,
+                    duration: const Duration(milliseconds: 200),
+                    child: const Icon(Icons.add),
+                  ),
+                ),
+              ],
             )
           : null,
+    );
+  }
+
+  Widget _buildFabOption({
+    required String heroTag,
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: AppTheme.bgSurface,
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(60),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppTheme.textPrimary,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        FloatingActionButton.small(
+          heroTag: heroTag,
+          backgroundColor: color,
+          onPressed: onPressed,
+          child: Icon(icon, size: 20),
+        ),
+      ],
     );
   }
 
