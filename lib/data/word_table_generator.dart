@@ -253,9 +253,9 @@ class WordTableGenerator {
       ..writeln('body{font-family:Arial,sans-serif;font-size:10pt;}')
       ..writeln('table{border-collapse:collapse;}')
       ..writeln('th,td{border:1px solid #000;padding:2px 5px;}')
-      ..writeln('th{font-weight:bold;background:#e9eef7;}')
+      ..writeln('th{font-weight:bold;background:#fff;}')
       ..writeln('.practice td{background:#fff;}')
-      ..writeln('.theory td{background:#b8cbe8;}')
+      ..writeln('.theory td{background:#fff;}')
       ..writeln('.special td{color:#f00;font-weight:bold;}')
       ..writeln(
         '.date,.modality,.classGroup{text-align:center;white-space:nowrap;}',
