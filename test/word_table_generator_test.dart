@@ -188,6 +188,55 @@ void main() {
       ),
     );
   });
+
+  test('splits activities by dates written in the activity text', () {
+    final now = DateTime(2026);
+    final config = CourseConfig(
+      id: 'cfg-text-dates',
+      name: 'Teste Datas no Texto',
+      semesterStartDate: now,
+      createdAt: now,
+      updatedAt: now,
+      sections: [
+        SectionEntry(
+          id: 's1',
+          orderIndex: 1,
+          name: 'Teorica Quarta 02',
+          referenceDaysOffset: 0,
+          date: DateTime(2026, 4, 29),
+          offsetDays: 0,
+          activities: [
+            ActivityEntry(
+              id: 'a1',
+              name:
+                  'Questionario 02: Grafia Correta (Inicia: 29/04/2026 e termina: 06/05/2026)',
+              activityType: 'Quiz',
+              modality: 'Teorica',
+            ),
+            ActivityEntry(
+              id: 'a2',
+              name:
+                  'Teorica Quinta 02: GPIO e Debug na ESP32 (Realizar-se-a: 30/04/2026)',
+              activityType: 'URL',
+              modality: 'Teorica',
+            ),
+          ],
+        ),
+      ],
+    );
+
+    final text = WordTableGenerator.generateTsv(
+      config,
+      const WordTableOptions(
+        preset: WordTablePreset.theory,
+        columns: {WordTableColumn.date, WordTableColumn.activities},
+      ),
+    );
+
+    expect(text, contains('29/04/2026\tQuestionario 02'));
+    expect(text, contains('30/04/2026\tTeorica Quinta 02'));
+    expect(text, isNot(contains('| Teorica Quinta 02')));
+  });
 }
 
 CourseConfig _sampleConfig() {

@@ -63,6 +63,7 @@ class WordTableRow {
 
 class WordTableGenerator {
   static final _dateFormat = DateFormat('dd/MM/yyyy');
+  static final _datePattern = RegExp(r'\b(\d{1,2})/(\d{1,2})/(\d{4})\b');
 
   static List<WordTableRow> buildRows(
     CourseConfig config,
@@ -85,23 +86,36 @@ class WordTableGenerator {
         ),
       );
       final activityInfos = section.activities.map((activity) {
-        final openDate =
-            activity.computeOpenDate(section.date) ??
-            activity.openDate ??
-            section.date;
+        final explicitOpenDate =
+            activity.computeOpenDate(section.date) ?? activity.openDate;
         final closeDate =
             activity.computeCloseDate(section.date) ?? activity.closeDate;
-        final name = _cleanText(
+        final provisionalName = _cleanText(
           MacroResolver.resolve(
             activity.name,
             config.semesterStartDate,
-            openDate,
-            openDate,
+            explicitOpenDate ?? section.date,
+            explicitOpenDate,
             closeDate,
           ),
         );
+        final activityDate =
+            explicitOpenDate ??
+            _extractActivityDate(provisionalName) ??
+            section.date;
+        final name = explicitOpenDate == null
+            ? provisionalName
+            : _cleanText(
+                MacroResolver.resolve(
+                  activity.name,
+                  config.semesterStartDate,
+                  explicitOpenDate,
+                  explicitOpenDate,
+                  closeDate,
+                ),
+              );
         return (
-          date: _dateOnly(openDate),
+          date: _dateOnly(activityDate),
           name: name,
           modality: activity.modality,
         );
@@ -320,6 +334,37 @@ class WordTableGenerator {
     return DateTime(value.year, value.month, value.day);
   }
 
+  static DateTime? _extractActivityDate(String text) {
+    final matches = _datePattern.allMatches(text).toList();
+    if (matches.isEmpty) return null;
+
+    for (final match in matches) {
+      final prefixStart = (match.start - 60).clamp(0, match.start);
+      final prefix = _normalize(text.substring(prefixStart, match.start));
+      if (prefix.contains('realizar') ||
+          prefix.contains('inicia') ||
+          prefix.contains('inicio') ||
+          prefix.contains('abertura') ||
+          prefix.contains('comeca')) {
+        return _parseDateMatch(match);
+      }
+    }
+
+    return _parseDateMatch(matches.first);
+  }
+
+  static DateTime? _parseDateMatch(RegExpMatch match) {
+    final day = int.tryParse(match.group(1)!);
+    final month = int.tryParse(match.group(2)!);
+    final year = int.tryParse(match.group(3)!);
+    if (day == null || month == null || year == null) return null;
+    final date = DateTime(year, month, day);
+    if (date.day != day || date.month != month || date.year != year) {
+      return null;
+    }
+    return date;
+  }
+
   static String _cleanText(String value) {
     if (value.trim().isEmpty) return '';
     return _decodeHtmlEntities(value)
@@ -349,6 +394,18 @@ class WordTableGenerator {
   static String _normalize(String text) {
     return text
         .toLowerCase()
+        .replaceAll('á', 'a')
+        .replaceAll('à', 'a')
+        .replaceAll('â', 'a')
+        .replaceAll('ã', 'a')
+        .replaceAll('é', 'e')
+        .replaceAll('ê', 'e')
+        .replaceAll('í', 'i')
+        .replaceAll('ó', 'o')
+        .replaceAll('ô', 'o')
+        .replaceAll('õ', 'o')
+        .replaceAll('ú', 'u')
+        .replaceAll('ç', 'c')
         .replaceAll('á', 'a')
         .replaceAll('à', 'a')
         .replaceAll('â', 'a')
